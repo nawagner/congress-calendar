@@ -40,7 +40,7 @@ The server starts at `http://localhost:8000`.
 | `chamber` | `house` or `senate` | all | Filter by chamber |
 | `committee` | string | all | Comma-separated committee system codes |
 | `congress` | int | 119 | Congress number |
-| `days_ahead` | 0–365 | 90 | Days into the future |
+| `days_ahead` | 0–365 | 30 | Days into the future |
 | `days_behind` | 0–365 | 30 | Days into the past |
 
 ## Environment Variables
