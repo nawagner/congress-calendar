@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request, Response
 
 from ..cache import MeetingCache
+from ..committees import COMMITTEES_119
 from ..congress_client import CongressClient
 from ..ical_builder import build_calendar, calendar_to_bytes
 from ..models import CommitteeMeeting
@@ -49,7 +50,8 @@ async def meetings_ics(
     if committee:
         meetings = filter_by_committee(meetings, committee)
 
-    cal = build_calendar(meetings)
+    calendar_name = _build_calendar_name(chamber, committee)
+    cal = build_calendar(meetings, calendar_name=calendar_name)
     return Response(
         content=calendar_to_bytes(cal),
         media_type="text/calendar",
@@ -76,6 +78,34 @@ def filter_by_committee(
             for ci in m.committees
         )
     ]
+
+
+_COMMITTEE_NAMES: dict[str, str] = {
+    c["system_code"]: c["name"] for c in COMMITTEES_119
+}
+
+_MAX_LISTED = 3
+
+
+def _build_calendar_name(
+    chamber: str | None, committee: str | None
+) -> str:
+    """Generate a human-readable calendar name from filter parameters."""
+    if committee:
+        codes = [c.strip().lower() for c in committee.split(",") if c.strip()]
+        names = [_COMMITTEE_NAMES[code] for code in codes if code in _COMMITTEE_NAMES]
+        if names:
+            if len(names) <= _MAX_LISTED:
+                return ", ".join(names) + " Meetings"
+            listed = ", ".join(names[:_MAX_LISTED])
+            return f"{listed} & {len(names) - _MAX_LISTED} More Meetings"
+
+    if chamber == "senate":
+        return "Senate Committee Meetings"
+    if chamber == "house":
+        return "House Committee Meetings"
+
+    return "Congress Committee Meetings"
 
 
 def _parse_meetings(raw: list[dict[str, Any]], congress: int) -> list[CommitteeMeeting]:

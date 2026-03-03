@@ -19,12 +19,15 @@ CHAMBER_PREFIX = {
 }
 
 
-def build_calendar(meetings: list[CommitteeMeeting]) -> Calendar:
+def build_calendar(
+    meetings: list[CommitteeMeeting],
+    calendar_name: str = "Congress Committee Meetings",
+) -> Calendar:
     """Build an iCal calendar from a list of committee meetings."""
     cal = Calendar()
     cal.add("prodid", "-//Congress Calendar//congress-calendar//EN")
     cal.add("version", "2.0")
-    cal.add("x-wr-calname", "Congress Committee Meetings")
+    cal.add("x-wr-calname", calendar_name)
     cal.add("x-wr-timezone", "America/New_York")
 
     for meeting in meetings:

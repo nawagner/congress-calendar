@@ -214,10 +214,21 @@ body {{
 /* Footer */
 .footer {{
     background: var(--navy-deep); color: rgba(255,255,255,.5); text-align: center;
-    padding: 1.5rem; font-size: .75rem;
+    padding: 2rem 1.5rem; font-size: .75rem;
 }}
+.footer-brand {{
+    margin-bottom: .75rem; font-size: .8125rem; color: rgba(255,255,255,.6);
+}}
+.footer-brand a {{ color: var(--gold); text-decoration: none; font-weight: 600; }}
+.footer-brand a:hover {{ text-decoration: underline; }}
+.footer-links {{
+    display: flex; align-items: center; justify-content: center; gap: 1rem;
+    flex-wrap: wrap;
+}}
+.footer-links .sep {{ color: rgba(255,255,255,.25); }}
 .footer a {{ color: var(--gold-muted); text-decoration: none; }}
 .footer a:hover {{ text-decoration: underline; }}
+.footer-contact {{ margin-top: .75rem; }}
 
 @media (max-width: 480px) {{
     .hero {{ padding: 2.5rem 1.25rem 2rem; }}
@@ -338,7 +349,12 @@ body {{
 </main>
 
 <footer class="footer">
-  Data sourced from <a href="https://www.congress.gov" target="_blank" rel="noopener">Congress.gov</a>
+  <div class="footer-brand">A project by <a href="https://www.learningjourneyai.com/" target="_blank" rel="noopener">Learning Journey AI</a></div>
+  <div class="footer-links">
+    <span>Data sourced from <a href="https://www.congress.gov" target="_blank" rel="noopener">Congress.gov</a></span>
+    <span class="sep">&middot;</span>
+    <span><a href="mailto:nwagner@learningjourneyai.com">Contact us</a></span>
+  </div>
 </footer>
 
 <script type="application/json" id="committee-data">{committees_json}</script>
