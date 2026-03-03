@@ -47,19 +47,7 @@ async def meetings_ics(
 
     # Filter by committee if requested
     if committee:
-        codes = {c.strip().lower() for c in committee.split(",")}
-        # Parent committee codes end in "00" — also match their subcommittees
-        # e.g. "hssy00" matches "hssy15", "hssy21", etc.
-        prefixes = {code[:-2] for code in codes if code.endswith("00")}
-        meetings = [
-            m
-            for m in meetings
-            if any(
-                ci.system_code.lower() in codes
-                or any(ci.system_code.lower().startswith(p) for p in prefixes)
-                for ci in m.committees
-            )
-        ]
+        meetings = filter_by_committee(meetings, committee)
 
     cal = build_calendar(meetings)
     return Response(
@@ -67,6 +55,27 @@ async def meetings_ics(
         media_type="text/calendar",
         headers={"Content-Disposition": "inline; filename=meetings.ics"},
     )
+
+
+def filter_by_committee(
+    meetings: list[CommitteeMeeting], committee: str
+) -> list[CommitteeMeeting]:
+    """Filter meetings by committee code(s).
+
+    Parent committee codes (ending in "00") also match their subcommittees.
+    For example, "hssy00" matches "hssy00", "hssy15", "hssy21", etc.
+    """
+    codes = {c.strip().lower() for c in committee.split(",")}
+    prefixes = {code[:-2] for code in codes if code.endswith("00")}
+    return [
+        m
+        for m in meetings
+        if any(
+            ci.system_code.lower() in codes
+            or any(ci.system_code.lower().startswith(p) for p in prefixes)
+            for ci in m.committees
+        )
+    ]
 
 
 def _parse_meetings(raw: list[dict[str, Any]], congress: int) -> list[CommitteeMeeting]:
