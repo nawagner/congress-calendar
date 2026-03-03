@@ -32,6 +32,22 @@ def test_meetings_ics_with_committee_filter(client):
     assert "BEGIN:VCALENDAR" in body
 
 
+def test_parent_committee_includes_subcommittee_meetings(client):
+    """Filtering by a parent code like hssy00 should also return subcommittee meetings."""
+    resp = client.get(
+        "/calendar/meetings.ics",
+        params={"chamber": "house", "committee": "hssy00", "days_behind": 365},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+
+    # The feed should contain at least one subcommittee meeting.
+    # Subcommittee events include "Subcommittee" in their SUMMARY line.
+    assert "Subcommittee" in body, (
+        "Expected at least one subcommittee meeting when filtering by parent code hssy00"
+    )
+
+
 def test_invalid_chamber(client):
     resp = client.get("/calendar/meetings.ics", params={"chamber": "invalid"})
     assert resp.status_code == 422
