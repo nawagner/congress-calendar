@@ -272,7 +272,7 @@ body {{
   <div class="card">
     <div class="card-header"><div class="card-header-bar"></div><h2>Date Range</h2></div>
     <div class="date-grid">
-      <div class="field"><label for="days-ahead">Days ahead</label><input type="number" id="days-ahead" value="90" min="0" max="365"></div>
+      <div class="field"><label for="days-ahead">Days ahead</label><input type="number" id="days-ahead" value="30" min="0" max="365"></div>
       <div class="field"><label for="days-behind">Days behind</label><input type="number" id="days-behind" value="30" min="0" max="365"></div>
     </div>
   </div>
@@ -418,12 +418,12 @@ body {{
   function buildUrl() {{
     var ch = chamber();
     var sel = checked();
-    var ahead = parseInt(document.getElementById('days-ahead').value) || 90;
+    var ahead = parseInt(document.getElementById('days-ahead').value) || 30;
     var behind = parseInt(document.getElementById('days-behind').value) || 30;
     var p = [];
     if (ch !== 'all') p.push('chamber=' + ch);
     if (sel.length > 0) p.push('committee=' + sel.join(','));
-    if (ahead !== 90) p.push('days_ahead=' + ahead);
+    if (ahead !== 30) p.push('days_ahead=' + ahead);
     if (behind !== 30) p.push('days_behind=' + behind);
     return BASE_URL + '/calendar/meetings.ics' + (p.length ? '?' + p.join('&') : '');
   }}
