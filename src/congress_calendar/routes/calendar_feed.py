@@ -48,10 +48,17 @@ async def meetings_ics(
     # Filter by committee if requested
     if committee:
         codes = {c.strip().lower() for c in committee.split(",")}
+        # Parent committee codes end in "00" — also match their subcommittees
+        # e.g. "hssy00" matches "hssy15", "hssy21", etc.
+        prefixes = {code[:-2] for code in codes if code.endswith("00")}
         meetings = [
             m
             for m in meetings
-            if any(ci.system_code.lower() in codes for ci in m.committees)
+            if any(
+                ci.system_code.lower() in codes
+                or any(ci.system_code.lower().startswith(p) for p in prefixes)
+                for ci in m.committees
+            )
         ]
 
     cal = build_calendar(meetings)
