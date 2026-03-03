@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from .cache import MeetingCache
 from .config import Settings
-from .routes import calendar_feed, health
+from .routes import calendar_feed, health, landing
 
 
 @asynccontextmanager
@@ -28,4 +28,5 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(calendar_feed.router)
+    app.include_router(landing.router)
     return app
