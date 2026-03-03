@@ -99,6 +99,12 @@ def test_empty_calendar():
     assert "VEVENT" not in ical
 
 
+def test_custom_calendar_name():
+    cal = build_calendar([_make_meeting()], calendar_name="Senate Judiciary Meetings")
+    ical = cal.to_ical().decode()
+    assert "X-WR-CALNAME:Senate Judiciary Meetings" in ical
+
+
 def test_multiple_meetings():
     meetings = [
         _make_meeting(event_id="111"),
