@@ -16,4 +16,6 @@ class Settings(BaseSettings):
     max_retries: int = 3
     retry_base_delay: float = 1.0
 
+    base_url: str = ""
+
     model_config = {"env_file": ".env"}
