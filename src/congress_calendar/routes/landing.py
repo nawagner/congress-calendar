@@ -353,6 +353,8 @@ body {{
   <div class="footer-links">
     <span>Data sourced from <a href="https://www.congress.gov" target="_blank" rel="noopener">Congress.gov</a></span>
     <span class="sep">&middot;</span>
+    <span><a href="https://github.com/nawagner/congress-calendar" target="_blank" rel="noopener">GitHub</a></span>
+    <span class="sep">&middot;</span>
     <span><a href="mailto:nwagner@learningjourneyai.com">Contact us</a></span>
   </div>
 </footer>
