@@ -172,6 +172,9 @@ body {{
     font-family: inherit; width: 100%;
 }}
 .field input[type="number"]:focus {{ border-color: var(--navy-light); }}
+.date-note {{
+    margin-top: .75rem; font-size: .8125rem; color: var(--text-secondary); line-height: 1.5;
+}}
 
 /* URL Preview */
 .url-box {{
@@ -286,6 +289,7 @@ body {{
       <div class="field"><label for="days-ahead">Days ahead</label><input type="number" id="days-ahead" value="30" min="0" max="365"></div>
       <div class="field"><label for="days-behind">Days behind</label><input type="number" id="days-behind" value="30" min="0" max="365"></div>
     </div>
+    <p class="date-note">Note: Congress.gov typically posts meetings less than two weeks in advance. Events older than your &ldquo;days behind&rdquo; window will no longer appear in the feed.</p>
   </div>
 
   <div class="card">
