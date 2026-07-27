@@ -1,15 +1,15 @@
 """Unit tests for committee filtering — no API needed."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+from congress_calendar.meeting_query import filter_by_committee
 from congress_calendar.models import CommitteeInfo, CommitteeMeeting
-from congress_calendar.routes.calendar_feed import filter_by_committee
 
 
 def _make_meeting(system_code: str, name: str = "Test Committee") -> CommitteeMeeting:
     return CommitteeMeeting(
         event_id="1",
-        date=datetime(2026, 3, 5, 15, 0, 0, tzinfo=timezone.utc),
+        date=datetime(2026, 3, 5, 15, 0, 0, tzinfo=UTC),
         title="Test Hearing",
         chamber="house",
         meeting_status="Scheduled",

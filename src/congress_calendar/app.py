@@ -2,15 +2,15 @@
 
 import json
 import logging
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from .cache import MeetingCache
 from .config import Settings
 from .middleware import RequestLoggingMiddleware
-from .routes import calendar_feed, health, landing
+from .routes import calendar_feed, health, landing, meetings_api
 
 
 class _JSONFormatter(logging.Formatter):
@@ -63,5 +63,6 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestLoggingMiddleware)
     app.include_router(health.router)
     app.include_router(calendar_feed.router)
+    app.include_router(meetings_api.router)
     app.include_router(landing.router)
     return app

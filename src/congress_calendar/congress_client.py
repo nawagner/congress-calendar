@@ -79,7 +79,9 @@ class CongressClient:
                 )
                 await asyncio.sleep(delay)
             else:
-                raise RuntimeError(f"Rate limit exceeded on {endpoint} after {attempt + 1} attempts")
+                raise RuntimeError(
+                    f"Rate limit exceeded on {endpoint} after {attempt + 1} attempts"
+                )
 
         response.raise_for_status()
         return response.json()

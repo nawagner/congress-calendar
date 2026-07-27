@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from icalendar import Calendar, Event
 
-from .models import CommitteeMeeting
+from .models import CommitteeMeeting, format_location
 
 STATUS_MAP = {
     "scheduled": "CONFIRMED",
@@ -54,13 +54,9 @@ def _build_event(meeting: CommitteeMeeting) -> Event:
     event.add("dtend", meeting.date + timedelta(hours=2))
 
     # Location
-    parts = []
-    if meeting.room:
-        parts.append(f"Room {meeting.room}")
-    if meeting.building:
-        parts.append(meeting.building)
-    if parts:
-        event.add("location", ", ".join(parts))
+    location = format_location(meeting.building, meeting.room)
+    if location:
+        event.add("location", location)
 
     # Status
     status = STATUS_MAP.get(meeting.meeting_status.lower(), "CONFIRMED")
