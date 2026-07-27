@@ -46,3 +46,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# One big inline HTML/CSS/JS template — wrapping its lines hurts readability.
+"src/congress_calendar/routes/landing.py" = ["E501"]

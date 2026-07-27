@@ -1,6 +1,6 @@
 """Unit tests for iCal builder — no API needed."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from congress_calendar.ical_builder import build_calendar, calendar_to_bytes
 from congress_calendar.models import CommitteeInfo, CommitteeMeeting
@@ -9,7 +9,7 @@ from congress_calendar.models import CommitteeInfo, CommitteeMeeting
 def _make_meeting(**overrides) -> CommitteeMeeting:
     defaults = {
         "event_id": "12345",
-        "date": datetime(2026, 3, 5, 15, 0, 0, tzinfo=timezone.utc),
+        "date": datetime(2026, 3, 5, 15, 0, 0, tzinfo=UTC),
         "title": "Hearing on AI Policy",
         "chamber": "senate",
         "meeting_status": "Scheduled",

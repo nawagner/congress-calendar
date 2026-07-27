@@ -12,8 +12,16 @@ COMMITTEES_119: list[dict[str, str]] = [
     {"name": "Environment and Public Works", "system_code": "ssev00", "chamber": "senate"},
     {"name": "Finance", "system_code": "ssfi00", "chamber": "senate"},
     {"name": "Foreign Relations", "system_code": "ssfr00", "chamber": "senate"},
-    {"name": "Health, Education, Labor, and Pensions", "system_code": "sshr00", "chamber": "senate"},
-    {"name": "Homeland Security and Governmental Affairs", "system_code": "ssga00", "chamber": "senate"},
+    {
+        "name": "Health, Education, Labor, and Pensions",
+        "system_code": "sshr00",
+        "chamber": "senate",
+    },
+    {
+        "name": "Homeland Security and Governmental Affairs",
+        "system_code": "ssga00",
+        "chamber": "senate",
+    },
     {"name": "Judiciary", "system_code": "ssju00", "chamber": "senate"},
     {"name": "Rules and Administration", "system_code": "ssra00", "chamber": "senate"},
     {"name": "Small Business and Entrepreneurship", "system_code": "sssb00", "chamber": "senate"},
