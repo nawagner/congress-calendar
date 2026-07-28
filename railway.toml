@@ -2,6 +2,9 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "uvicorn congress_calendar.app:create_app --host 0.0.0.0 --port ${PORT:-8000} --factory --proxy-headers --forwarded-allow-ips='*'"
+# Absolute path on purpose. Nixpacks installs the app into /opt/venv and only
+# adds it to PATH by appending to /root/.profile, which the non-login shell the
+# start command runs under never sources — a bare "uvicorn" is not found.
+startCommand = "/opt/venv/bin/uvicorn congress_calendar.app:create_app --host 0.0.0.0 --port ${PORT:-8000} --factory --proxy-headers --forwarded-allow-ips='*'"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
