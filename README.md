@@ -46,6 +46,9 @@ Both `/calendar/meetings.ics` and `/api/meetings` take the same filters.
 | `days_ahead` | 0–365 | 30 | Days into the future |
 | `days_behind` | 0–365 | 30 | Days into the past |
 
+The date window bounds the date each meeting is *held*. Congress.gov can't do
+this itself — see [Date filtering](#date-filtering) below.
+
 A parent committee code (one ending in `00`, like `hssy00`) also matches its
 subcommittees.
 
@@ -92,7 +95,7 @@ src/congress_calendar/
 ├── congress_client.py  # Async Congress.gov API client with retry/pagination
 ├── meeting_query.py    # Shared fetch/cache/parse/filter for both endpoints
 ├── ical_builder.py     # iCal (RFC 5545) calendar generation
-├── cache.py            # In-memory TTL cache for API responses
+├── cache.py            # TTL cache per Congress + per-event detail cache
 ├── models.py           # CommitteeMeeting + CommitteeInfo models
 ├── committees.py       # Static committee list for 119th Congress
 └── routes/
@@ -107,3 +110,25 @@ chambers once from `/api/meetings`, then chamber and committee toggles filter
 in the browser, so they respond instantly and never re-hit Congress.gov. The
 toggles drive the `.ics` URL too, which is why the subscribe card always
 matches the agenda above it.
+
+### Date filtering
+
+Congress.gov's `fromDateTime`/`toDateTime` parameters filter each record's
+`updateDate` — when the record was last edited — **not** the date the meeting
+is held, and the API offers no way to filter or sort by the latter. Passing a
+date window straight through drops meetings that fall inside it but haven't
+been edited recently, and admits meetings held months outside it.
+
+So `fetch_meetings` enumerates the whole Congress and `meeting_query` applies
+the real date window to the parsed results, in Eastern time. Two caches keep
+that affordable:
+
+- `MeetingCache` — the full enriched set for a Congress, keyed by congress
+  alone and expiring on `CACHE_TTL_MINUTES`. Chamber, date, and committee
+  filters all run post-cache, so every combination shares one fetch.
+- `DetailCache` — individual meeting records keyed by `(eventId, updateDate)`.
+  A record can't change without Congress.gov bumping its `updateDate`, so
+  entries never go stale, and each refresh only fetches what actually moved.
+
+The first request after a restart is slow (it fetches detail for every meeting
+in the Congress); everything after that is served from these caches.

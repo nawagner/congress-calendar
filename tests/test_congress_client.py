@@ -59,6 +59,10 @@ def _is_list_call(request):
     return request.url.path.rstrip("/").count("/") == 4
 
 
+def _chamber_of(request):
+    return "senate" if "/senate" in request.url.path else "house"
+
+
 @pytest.mark.asyncio
 async def test_rate_limited_list_call_raises_instead_of_emptying_a_chamber():
     """A throttled Senate list must not silently yield a House-only calendar."""
@@ -72,7 +76,7 @@ async def test_rate_limited_list_call_raises_instead_of_emptying_a_chamber():
 
     client = _client(handler, max_retries=1)
     with pytest.raises(CongressApiError) as exc:
-        await client.fetch_meetings(119, None, "2026-07-29", "2026-09-27")
+        await client.fetch_meetings(119)
     assert exc.value.code == "OVER_RATE_LIMIT"
     await client._client.aclose()
 
@@ -88,7 +92,7 @@ async def test_rate_limited_detail_call_raises_instead_of_dropping_meetings():
 
     client = _client(handler, max_retries=1)
     with pytest.raises(CongressApiError):
-        await client.fetch_meetings(119, "senate", "2026-07-29", "2026-09-27")
+        await client.fetch_meetings(119)
     await client._client.aclose()
 
 
@@ -101,7 +105,7 @@ async def test_error_body_under_http_200_is_not_treated_as_data():
 
     client = _client(handler)
     with pytest.raises(CongressApiError) as exc:
-        await client.fetch_meetings(119, "senate", "2026-07-29", "2026-09-27")
+        await client.fetch_meetings(119)
     assert exc.value.code == "API_KEY_INVALID"
     await client._client.aclose()
 
@@ -113,6 +117,8 @@ async def test_rate_limit_is_retried_then_succeeds():
 
     def handler(request):
         if _is_list_call(request):
+            if _chamber_of(request) == "house":
+                return httpx.Response(200, json=_list_body("house", 0))
             calls["n"] += 1
             if calls["n"] == 1:
                 return httpx.Response(200, json=RATE_LIMIT_BODY)
@@ -120,7 +126,7 @@ async def test_rate_limit_is_retried_then_succeeds():
         return httpx.Response(200, json=_detail_body(0, "senate"))
 
     client = _client(handler, max_retries=2)
-    meetings = await client.fetch_meetings(119, "senate", "2026-07-29", "2026-09-27")
+    meetings = await client.fetch_meetings(119)
     assert calls["n"] == 2
     assert len(meetings) == 1
     await client._client.aclose()
@@ -132,14 +138,15 @@ async def test_missing_detail_payload_drops_only_that_meeting():
 
     def handler(request):
         if _is_list_call(request):
-            return httpx.Response(200, json=_list_body("senate", 3))
+            count = 3 if _chamber_of(request) == "senate" else 0
+            return httpx.Response(200, json=_list_body("senate", count))
         if request.url.path.endswith("/1"):
             return httpx.Response(200, json={})
         event_id = request.url.path.rsplit("/", 1)[-1]
         return httpx.Response(200, json=_detail_body(event_id, "senate"))
 
     client = _client(handler)
-    meetings = await client.fetch_meetings(119, "senate", "2026-07-29", "2026-09-27")
+    meetings = await client.fetch_meetings(119)
     assert len(meetings) == 2
     await client._client.aclose()
 

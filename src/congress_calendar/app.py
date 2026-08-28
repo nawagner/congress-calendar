@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .cache import MeetingCache
+from .cache import DetailCache, MeetingCache
 from .config import Settings
 from .middleware import RequestLoggingMiddleware
 from .routes import calendar_feed, health, landing, meetings_api
@@ -50,6 +50,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
     app.state.cache = MeetingCache(ttl_seconds=settings.cache_ttl_minutes * 60)
+    # Outlives the TTL cache on purpose: detail records are immutable for a
+    # given updateDate, so each half-hourly refresh only fetches what changed.
+    app.state.details = DetailCache()
     yield
 
 

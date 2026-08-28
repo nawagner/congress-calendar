@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from .cache import DetailCache
 from .config import Settings
 
 logger = logging.getLogger("congress-calendar.client")
@@ -57,8 +58,9 @@ class CongressClient:
     Handles authentication, auto-pagination, and retry on rate limits.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, details: DetailCache | None = None) -> None:
         self.settings = settings
+        self.details = details if details is not None else DetailCache()
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "CongressClient":
@@ -159,11 +161,19 @@ class CongressClient:
         logger.info("Listed %d meetings from %s", len(all_items), endpoint)
         return all_items
 
-    async def _fetch_detail(self, url: str) -> dict[str, Any] | None:
-        """Fetch a single meeting's detail, returning None on a per-record failure."""
+    async def _fetch_detail(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        """Return a meeting's detail record, from cache when it hasn't changed."""
+        event_id = str(item.get("eventId", ""))
+        update_date = str(item.get("updateDate", ""))
+
+        cached = self.details.get(event_id, update_date)
+        if cached is not None:
+            return cached
+
         # The list item `url` is a full URL with api_key — we need the path only
         # Example: https://api.congress.gov/v3/committee-meeting/119/senate/338002?format=json
         # Extract the path after /v3
+        url = item.get("url", "")
         try:
             path = url.split("/v3", 1)[1].split("?")[0]
         except (IndexError, AttributeError):
@@ -183,6 +193,8 @@ class CongressClient:
         if not isinstance(detail, dict):
             logger.warning("No committeeMeeting payload for %s", path)
             return None
+
+        self.details.set(event_id, update_date, detail)
         return detail
 
     async def _enrich_meetings(
@@ -195,7 +207,7 @@ class CongressClient:
         # Process in batches to avoid overwhelming the API
         for i in range(0, len(items), max_concurrent):
             batch = items[i : i + max_concurrent]
-            tasks = [self._fetch_detail(item.get("url", "")) for item in batch]
+            tasks = [self._fetch_detail(item) for item in batch]
             results = await asyncio.gather(*tasks)
             for detail in results:
                 if detail and isinstance(detail, dict):
@@ -210,36 +222,33 @@ class CongressClient:
             )
         return enriched
 
-    async def fetch_meetings(
-        self,
-        congress: int,
-        chamber: str | None,
-        from_date: str,
-        to_date: str,
-    ) -> list[dict[str, Any]]:
-        """Fetch committee meetings with full details.
+    async def fetch_meetings(self, congress: int) -> list[dict[str, Any]]:
+        """Fetch every committee meeting in a Congress, with full details.
 
-        Note: Congress.gov applies `fromDateTime`/`toDateTime` to each record's
-        `updateDate`, *not* to the date the meeting is held. Callers wanting a
-        real date window must filter the returned meetings themselves.
+        Deliberately unfiltered. Congress.gov applies `fromDateTime`/
+        `toDateTime` to each record's `updateDate` — when the record was last
+        edited — and offers no way to filter or sort by the date a meeting is
+        actually held. Passing a date window there drops meetings that sit
+        inside it but haven't been touched recently, and admits ones held
+        months outside it. So enumerate the Congress and let callers apply a
+        real date window to the parsed results.
+
+        The listing is cheap (a few hundred records per page) and the detail
+        cache means only meetings whose `updateDate` moved since the last
+        refresh are actually fetched.
         """
-        params = {
-            "fromDateTime": f"{from_date}T00:00:00Z",
-            "toDateTime": f"{to_date}T23:59:59Z",
-        }
+        house, senate = await asyncio.gather(
+            self._get_all_list(f"/committee-meeting/{congress}/house"),
+            self._get_all_list(f"/committee-meeting/{congress}/senate"),
+        )
+        logger.info("Listed %d house and %d senate meetings", len(house), len(senate))
 
-        if chamber:
-            items = await self._get_all_list(
-                f"/committee-meeting/{congress}/{chamber}",
-                params=params,
-            )
-        else:
-            # Fetch both chambers concurrently
-            house, senate = await asyncio.gather(
-                self._get_all_list(f"/committee-meeting/{congress}/house", params=params),
-                self._get_all_list(f"/committee-meeting/{congress}/senate", params=params),
-            )
-            logger.info("Listed %d house and %d senate meetings", len(house), len(senate))
-            items = house + senate
-
-        return await self._enrich_meetings(items)
+        cached_before = len(self.details)
+        enriched = await self._enrich_meetings(house + senate)
+        logger.info(
+            "Enriched %d meetings (%d fetched, %d served from detail cache)",
+            len(enriched),
+            len(self.details) - cached_before,
+            len(enriched) - (len(self.details) - cached_before),
+        )
+        return enriched

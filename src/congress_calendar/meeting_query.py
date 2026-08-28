@@ -6,8 +6,9 @@ meetings a given set of filters produces.
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 
@@ -16,6 +17,11 @@ from .congress_client import CongressClient
 from .models import CommitteeMeeting
 
 logger = logging.getLogger("congress-calendar.query")
+
+# Congress sits on Eastern time, and the UI renders every meeting in ET, so the
+# date window has to be judged in ET too — otherwise a 7pm ET hearing on the
+# last day of the window reads as the next day in UTC and falls out of it.
+ET = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
@@ -43,23 +49,47 @@ async def load_meetings(
     days_ahead = days_ahead if days_ahead is not None else settings.days_ahead
     days_behind = days_behind if days_behind is not None else settings.days_behind
 
-    today = date.today()
+    today = datetime.now(ET).date()
     from_date = (today - timedelta(days=days_behind)).isoformat()
     to_date = (today + timedelta(days=days_ahead)).isoformat()
 
-    raw_meetings = cache.get(congress, chamber, from_date, to_date)
+    raw_meetings = cache.get(congress)
 
     if raw_meetings is None:
-        async with CongressClient(settings) as client:
-            raw_meetings = await client.fetch_meetings(congress, chamber, from_date, to_date)
-        cache.set(congress, chamber, from_date, to_date, raw_meetings)
+        async with CongressClient(settings, details=request.app.state.details) as client:
+            raw_meetings = await client.fetch_meetings(congress)
+        cache.set(congress, raw_meetings)
+
+    meetings = parse_meetings(raw_meetings, congress)
+    meetings = filter_by_date(meetings, from_date, to_date)
+    if chamber:
+        meetings = [m for m in meetings if m.chamber == chamber]
 
     return MeetingWindow(
         congress=congress,
         from_date=from_date,
         to_date=to_date,
-        meetings=parse_meetings(raw_meetings, congress),
+        meetings=meetings,
     )
+
+
+def filter_by_date(
+    meetings: list[CommitteeMeeting], from_date: str, to_date: str
+) -> list[CommitteeMeeting]:
+    """Keep meetings held within [from_date, to_date] inclusive, judged in ET.
+
+    This is the real date window. Congress.gov can't apply one server-side —
+    its date params filter each record's `updateDate` instead — so the window
+    the caller asked for is enforced here, against the date each meeting is
+    actually held.
+    """
+    kept = []
+    for m in meetings:
+        when = m.date if m.date.tzinfo else m.date.replace(tzinfo=UTC)
+        held_on = when.astimezone(ET).date().isoformat()
+        if from_date <= held_on <= to_date:
+            kept.append(m)
+    return kept
 
 
 def parse_meetings(raw: list[dict[str, Any]], congress: int) -> list[CommitteeMeeting]:
