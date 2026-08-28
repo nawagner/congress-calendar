@@ -4,6 +4,7 @@ Used by both the iCal feed and the JSON API so the two always agree on which
 meetings a given set of filters produces.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
@@ -13,6 +14,8 @@ from fastapi import Request
 from .cache import MeetingCache
 from .congress_client import CongressClient
 from .models import CommitteeMeeting
+
+logger = logging.getLogger("congress-calendar.query")
 
 
 @dataclass(frozen=True)
@@ -60,13 +63,22 @@ async def load_meetings(
 
 
 def parse_meetings(raw: list[dict[str, Any]], congress: int) -> list[CommitteeMeeting]:
-    """Parse raw API dicts into CommitteeMeeting models, skipping bad records."""
+    """Parse raw API dicts into CommitteeMeeting models, skipping bad records.
+
+    A record missing `date` raises KeyError, a null one TypeError, and an
+    unparseable one ValueError — all mean the same thing here: no usable
+    meeting. Skipping is right, but silence is not, so the losses are logged.
+    """
     meetings: list[CommitteeMeeting] = []
+    skipped = 0
     for item in raw:
         try:
             meetings.append(CommitteeMeeting.from_api_response(item, congress))
-        except (KeyError, ValueError):
+        except (KeyError, TypeError, ValueError):
+            skipped += 1
             continue
+    if skipped:
+        logger.warning("Skipped %d of %d meeting records that failed to parse", skipped, len(raw))
     return meetings
 
 
