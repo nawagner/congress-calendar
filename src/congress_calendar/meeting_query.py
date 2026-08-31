@@ -4,6 +4,7 @@ Used by both the iCal feed and the JSON API so the two always agree on which
 meetings a given set of filters produces.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Request
 
-from .cache import MeetingCache
+from .cache import DetailCache, MeetingCache
+from .config import Settings
 from .congress_client import CongressClient
 from .models import CommitteeMeeting
 
@@ -53,12 +55,13 @@ async def load_meetings(
     from_date = (today - timedelta(days=days_behind)).isoformat()
     to_date = (today + timedelta(days=days_ahead)).isoformat()
 
-    raw_meetings = cache.get(congress)
-
-    if raw_meetings is None:
-        async with CongressClient(settings, details=request.app.state.details) as client:
-            raw_meetings = await client.fetch_meetings(congress)
-        cache.set(congress, raw_meetings)
+    raw_meetings = await fetch_into_cache(
+        settings,
+        cache,
+        request.app.state.details,
+        request.app.state.fetch_lock,
+        congress,
+    )
 
     meetings = parse_meetings(raw_meetings, congress)
     meetings = filter_by_date(meetings, from_date, to_date)
@@ -71,6 +74,36 @@ async def load_meetings(
         to_date=to_date,
         meetings=meetings,
     )
+
+
+async def fetch_into_cache(
+    settings: Settings,
+    cache: MeetingCache,
+    details: DetailCache,
+    lock: asyncio.Lock,
+    congress: int,
+) -> list[dict[str, Any]]:
+    """Return the Congress's meetings, fetching them once if the cache is cold.
+
+    A cold fetch enriches every meeting in the Congress, so two of them at once
+    would double an already expensive job and can breach the hourly API budget.
+    The lock makes concurrent callers — a request landing mid-warm-up, say —
+    wait for the one fetch in flight and share its result.
+    """
+    cached = cache.get(congress)
+    if cached is not None:
+        return cached
+
+    async with lock:
+        # Re-check: whoever held the lock has likely just filled the cache.
+        cached = cache.get(congress)
+        if cached is not None:
+            return cached
+
+        async with CongressClient(settings, details=details) as client:
+            raw = await client.fetch_meetings(congress)
+        cache.set(congress, raw)
+        return raw
 
 
 def filter_by_date(

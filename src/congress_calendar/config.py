@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     days_ahead: int = 30
     days_behind: int = 30
     timeout: float = 30.0
+    # Cold start enriches every meeting in the Congress; 25 took ~98s in
+    # production. Congress.gov caps on requests per hour, not concurrency.
+    detail_concurrency: int = 75
+    # Fill the cache on boot so the first visitor doesn't pay for it.
+    warm_cache_on_startup: bool = True
     max_retries: int = 3
     retry_base_delay: float = 1.0
 

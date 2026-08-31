@@ -62,6 +62,8 @@ calendar is a shareable link: `/?chamber=senate&committee=ssju00`.
 | `CONGRESS_API_KEY` | yes | — | Congress.gov API key |
 | `BASE_URL` | no | auto-detected | Public URL for generated feed links |
 | `CACHE_TTL_MINUTES` | no | 30 | API response cache TTL |
+| `DETAIL_CONCURRENCY` | no | 75 | Parallel detail fetches during a cold load |
+| `WARM_CACHE_ON_STARTUP` | no | true | Fill the cache on boot instead of on first request |
 
 ## Deployment
 
@@ -130,5 +132,8 @@ that affordable:
   A record can't change without Congress.gov bumping its `updateDate`, so
   entries never go stale, and each refresh only fetches what actually moved.
 
-The first request after a restart is slow (it fetches detail for every meeting
-in the Congress); everything after that is served from these caches.
+A cold load fetches detail for every meeting in the Congress, so the app warms
+the cache in the background on boot (`WARM_CACHE_ON_STARTUP`) rather than making
+the first visitor wait for it. A request arriving mid-warm-up waits on the same
+fetch instead of starting a second one — two concurrent cold loads would double
+an already expensive job and can breach the hourly API budget.

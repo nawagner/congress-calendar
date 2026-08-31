@@ -200,9 +200,10 @@ class CongressClient:
     async def _enrich_meetings(
         self,
         items: list[dict[str, Any]],
-        max_concurrent: int = 25,
+        max_concurrent: int | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch details for each meeting concurrently and return enriched dicts."""
+        max_concurrent = max_concurrent or self.settings.detail_concurrency
         enriched: list[dict[str, Any]] = []
         # Process in batches to avoid overwhelming the API
         for i in range(0, len(items), max_concurrent):

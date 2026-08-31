@@ -68,6 +68,16 @@ RAW_MEETINGS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def no_startup_warm(monkeypatch):
+    """Keep the boot-time warm-up out of the tests.
+
+    It would fire a detail request for every meeting in the Congress the moment
+    any TestClient starts. Tests that exercise warm-up turn it back on.
+    """
+    monkeypatch.setenv("WARM_CACHE_ON_STARTUP", "false")
+
+
 @pytest.fixture
 def client():
     """FastAPI test client for integration tests."""
