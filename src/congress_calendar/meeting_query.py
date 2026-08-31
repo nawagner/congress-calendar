@@ -4,16 +4,15 @@ Used by both the iCal feed and the JSON API so the two always agree on which
 meetings a given set of filters produces.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
-from .cache import DetailCache, MeetingCache
+from .cache import CongressLocks, DetailCache, MeetingCache
 from .config import Settings
 from .congress_client import CongressClient
 from .models import CommitteeMeeting
@@ -48,6 +47,12 @@ async def load_meetings(
     cache: MeetingCache = request.app.state.cache
 
     congress = congress or settings.default_congress
+    if congress not in settings.supported_congresses | {settings.default_congress}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Congress {congress} is not available; supported: "
+            + ", ".join(str(c) for c in sorted(settings.supported_congresses)),
+        )
     days_ahead = days_ahead if days_ahead is not None else settings.days_ahead
     days_behind = days_behind if days_behind is not None else settings.days_behind
 
@@ -59,7 +64,7 @@ async def load_meetings(
         settings,
         cache,
         request.app.state.details,
-        request.app.state.fetch_lock,
+        request.app.state.locks,
         congress,
     )
 
@@ -80,28 +85,52 @@ async def fetch_into_cache(
     settings: Settings,
     cache: MeetingCache,
     details: DetailCache,
-    lock: asyncio.Lock,
+    locks: CongressLocks,
     congress: int,
 ) -> list[dict[str, Any]]:
     """Return the Congress's meetings, fetching them once if the cache is cold.
 
     A cold fetch enriches every meeting in the Congress, so two of them at once
     would double an already expensive job and can breach the hourly API budget.
-    The lock makes concurrent callers — a request landing mid-warm-up, say —
-    wait for the one fetch in flight and share its result.
+    The per-congress lock makes concurrent callers — a request landing
+    mid-warm-up, say — wait for the one fetch in flight and share its result.
+
+    When a refresh fails or comes back visibly incomplete, the last good answer
+    is served instead. The cached entry has expired by the time we get here, so
+    the alternative is a 500 or a short calendar for every subscriber until the
+    upstream recovers — both worse than data that is one TTL old.
     """
     cached = cache.get(congress)
     if cached is not None:
         return cached
 
-    async with lock:
+    async with locks.get(congress):
         # Re-check: whoever held the lock has likely just filled the cache.
         cached = cache.get(congress)
         if cached is not None:
             return cached
 
-        async with CongressClient(settings, details=details) as client:
-            raw = await client.fetch_meetings(congress)
+        stale = cache.last_good(congress)
+        if stale is not None and cache.in_retry_backoff(congress):
+            # A refresh failed recently. Keep serving the last good copy rather
+            # than hammering an upstream that is probably still failing.
+            return stale
+
+        try:
+            async with CongressClient(settings, details=details) as client:
+                raw = await client.fetch_meetings(congress)
+        except Exception:
+            if stale is None:
+                raise
+            cache.mark_failed(congress)
+            logger.exception(
+                "Refresh for congress %d failed; serving %d meetings from the "
+                "last good fetch",
+                congress,
+                len(stale),
+            )
+            return stale
+
         cache.set(congress, raw)
         return raw
 

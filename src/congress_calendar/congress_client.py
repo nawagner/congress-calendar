@@ -16,6 +16,16 @@ logger = logging.getLogger("congress-calendar.client")
 RETRYABLE_ERROR_CODES = {"OVER_RATE_LIMIT"}
 
 
+# A cold fetch spans thousands of records, so a few unusable ones are normal.
+# Losing more than this means something systemic — a schema change, an upstream
+# outage — and the result must not be cached as if it were the whole calendar.
+MAX_DROPPED_FRACTION = 0.1
+
+
+class IncompleteFetchError(RuntimeError):
+    """Too many meetings lost their detail records for the result to be trusted."""
+
+
 class CongressApiError(RuntimeError):
     """Congress.gov returned an error envelope instead of data."""
 
@@ -61,6 +71,7 @@ class CongressClient:
     def __init__(self, settings: Settings, details: DetailCache | None = None) -> None:
         self.settings = settings
         self.details = details if details is not None else DetailCache()
+        self._detail_fetches = 0
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "CongressClient":
@@ -163,8 +174,10 @@ class CongressClient:
 
     async def _fetch_detail(self, item: dict[str, Any]) -> dict[str, Any] | None:
         """Return a meeting's detail record, from cache when it hasn't changed."""
-        event_id = str(item.get("eventId", ""))
-        update_date = str(item.get("updateDate", ""))
+        # `or ""` rather than a get() default: a JSON null would otherwise
+        # stringify to "None" and become a key that never changes again.
+        event_id = str(item.get("eventId") or "")
+        update_date = str(item.get("updateDate") or "")
 
         cached = self.details.get(event_id, update_date)
         if cached is not None:
@@ -179,6 +192,7 @@ class CongressClient:
         except (IndexError, AttributeError):
             logger.warning("Unparseable meeting detail URL: %r", url)
             return None
+        self._detail_fetches += 1
         try:
             data = await self.get(path)
         except CongressApiError:
@@ -221,6 +235,11 @@ class CongressClient:
                 dropped,
                 len(items),
             )
+        if items and dropped / len(items) > MAX_DROPPED_FRACTION:
+            raise IncompleteFetchError(
+                f"Only {len(enriched)} of {len(items)} listed meetings had usable "
+                f"detail records; refusing to serve this as the full calendar"
+            )
         return enriched
 
     async def fetch_meetings(self, congress: int) -> list[dict[str, Any]]:
@@ -244,12 +263,12 @@ class CongressClient:
         )
         logger.info("Listed %d house and %d senate meetings", len(house), len(senate))
 
-        cached_before = len(self.details)
+        self._detail_fetches = 0
         enriched = await self._enrich_meetings(house + senate)
         logger.info(
             "Enriched %d meetings (%d fetched, %d served from detail cache)",
             len(enriched),
-            len(self.details) - cached_before,
-            len(enriched) - (len(self.details) - cached_before),
+            self._detail_fetches,
+            len(enriched) - self._detail_fetches,
         )
         return enriched

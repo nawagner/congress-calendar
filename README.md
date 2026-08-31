@@ -42,7 +42,7 @@ Both `/calendar/meetings.ics` and `/api/meetings` take the same filters.
 |-----------|------|---------|-------------|
 | `chamber` | `house` or `senate` | all | Filter by chamber |
 | `committee` | string | all | Comma-separated committee system codes |
-| `congress` | int | 119 | Congress number |
+| `congress` | int | 119 | Congress number (only supported congresses; others 422) |
 | `days_ahead` | 0–365 | 30 | Days into the future |
 | `days_behind` | 0–365 | 30 | Days into the past |
 
@@ -64,6 +64,7 @@ calendar is a shareable link: `/?chamber=senate&committee=ssju00`.
 | `CACHE_TTL_MINUTES` | no | 30 | API response cache TTL |
 | `DETAIL_CONCURRENCY` | no | 75 | Parallel detail fetches during a cold load |
 | `WARM_CACHE_ON_STARTUP` | no | true | Fill the cache on boot instead of on first request |
+| `SUPPORTED_CONGRESSES` | no | `[119]` | Congresses the API will fetch; others are rejected |
 
 ## Deployment
 
@@ -127,7 +128,10 @@ that affordable:
 
 - `MeetingCache` — the full enriched set for a Congress, keyed by congress
   alone and expiring on `CACHE_TTL_MINUTES`. Chamber, date, and committee
-  filters all run post-cache, so every combination shares one fetch.
+  filters all run post-cache, so every combination shares one fetch. It also
+  keeps a last-good copy that never expires: a refresh that fails, or that
+  comes back missing more than 10% of the meetings it listed, serves that
+  instead of erroring or caching a short calendar.
 - `DetailCache` — individual meeting records keyed by `(eventId, updateDate)`.
   A record can't change without Congress.gov bumping its `updateDate`, so
   entries never go stale, and each refresh only fetches what actually moved.
@@ -136,4 +140,13 @@ A cold load fetches detail for every meeting in the Congress, so the app warms
 the cache in the background on boot (`WARM_CACHE_ON_STARTUP`) rather than making
 the first visitor wait for it. A request arriving mid-warm-up waits on the same
 fetch instead of starting a second one — two concurrent cold loads would double
-an already expensive job and can breach the hourly API budget.
+an already expensive job and can breach the hourly API budget. That lock is per
+congress, so one cold load never stalls requests for another.
+
+Because each congress costs a full enumeration, `congress` only accepts values
+in `SUPPORTED_CONGRESSES`; anything else is a 422 and costs no API calls.
+
+Measured on a deployment: ~98s cold with no warm-up, versus ~1.4s for a TTL
+refresh once the detail cache is populated, against a ~0.55s baseline. Note the
+warm-up runs once at boot — there is no periodic background refresh, so the
+first request after each TTL expiry pays that ~1s.

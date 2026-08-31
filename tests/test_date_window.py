@@ -10,11 +10,12 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 
-from congress_calendar.cache import DetailCache
+from congress_calendar.cache import CongressLocks, DetailCache, MeetingCache
 from congress_calendar.config import Settings
-from congress_calendar.congress_client import CongressClient
-from congress_calendar.meeting_query import filter_by_date
+from congress_calendar.congress_client import CongressApiError, CongressClient
+from congress_calendar.meeting_query import fetch_into_cache, filter_by_date
 from congress_calendar.models import CommitteeMeeting
 
 ET = ZoneInfo("America/New_York")
@@ -182,7 +183,7 @@ async def test_concurrent_cold_fetches_only_hit_the_api_once():
     settings = Settings(congress_api_key="test-key")
     cache = MeetingCache()
     details = DetailCache()
-    lock = asyncio.Lock()
+    locks = CongressLocks()
 
     real_fetch = CongressClient.fetch_meetings
     fetches = 0
@@ -190,22 +191,23 @@ async def test_concurrent_cold_fetches_only_hit_the_api_once():
     async def counting_fetch(self, congress):
         nonlocal fetches
         fetches += 1
+        # Replace the client __aenter__ built, closing it so it doesn't leak.
+        if self._client is not None:
+            await self._client.aclose()
         self._client = httpx.AsyncClient(
             base_url=settings.congress_api_base_url,
             transport=httpx.MockTransport(_handler_factory(detail_calls)),
         )
-        try:
-            return await real_fetch(self, congress)
-        finally:
-            await self._client.aclose()
+        return await real_fetch(self, congress)
 
-    CongressClient.fetch_meetings = counting_fetch
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(CongressClient, "fetch_meetings", counting_fetch)
     try:
         results = await asyncio.gather(
-            *[fetch_into_cache(settings, cache, details, lock, 119) for _ in range(4)]
+            *[fetch_into_cache(settings, cache, details, locks, 119) for _ in range(4)]
         )
     finally:
-        CongressClient.fetch_meetings = real_fetch
+        monkeypatch.undo()
 
     assert fetches == 1
     assert all(len(r) == 3 for r in results)
@@ -265,3 +267,124 @@ def test_startup_warm_up_spares_the_first_request(monkeypatch):
         assert c.get("/api/meetings").status_code == 200
 
     assert calls["n"] == 1
+
+
+async def test_a_failed_refresh_serves_the_last_good_data():
+    """An expired entry plus a failing upstream must not become a 500.
+
+    By the time a refresh runs the cached entry has expired, so without a
+    fallback every subscriber gets an error until the upstream recovers.
+    """
+    settings = Settings(congress_api_key="test-key")
+    cache = MeetingCache()
+    details = DetailCache()
+    locks = CongressLocks()
+
+    good = [{"eventId": "1", "date": "2026-09-01T14:00:00Z", "chamber": "Senate"}]
+    calls = {"n": 0}
+
+    async def flaky(self, congress):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return good
+        raise CongressApiError("OVER_RATE_LIMIT", "boom")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(CongressClient, "fetch_meetings", flaky)
+    try:
+        first = await fetch_into_cache(settings, cache, details, locks, 119)
+        assert first == good
+
+        # Expire the entry the way the TTL would, then fail the refresh.
+        cache._cache.clear()
+        second = await fetch_into_cache(settings, cache, details, locks, 119)
+        assert second == good, "should fall back to the last good fetch"
+
+        # And back off rather than retrying the failing upstream every request.
+        before = calls["n"]
+        third = await fetch_into_cache(settings, cache, details, locks, 119)
+        assert third == good
+        assert calls["n"] == before, "must not refetch while in retry backoff"
+    finally:
+        monkeypatch.undo()
+
+
+async def test_a_first_ever_fetch_failure_still_raises():
+    """With no last-good copy there is nothing to serve, so the error surfaces."""
+    settings = Settings(congress_api_key="test-key")
+
+    async def boom(self, congress):
+        raise CongressApiError("API_KEY_INVALID", "nope")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(CongressClient, "fetch_meetings", boom)
+    try:
+        with pytest.raises(CongressApiError):
+            await fetch_into_cache(
+                settings, MeetingCache(), DetailCache(), CongressLocks(), 119
+            )
+    finally:
+        monkeypatch.undo()
+
+
+def test_an_unsupported_congress_is_rejected_without_fetching(stub_client):
+    """`congress` is public, and each new value costs a whole enumeration."""
+    assert stub_client.get("/api/meetings", params={"congress": 118}).status_code == 422
+    assert stub_client.get("/api/meetings", params={"congress": 42}).status_code == 422
+    assert stub_client.get("/api/meetings", params={"congress": 119}).status_code == 200
+    assert (
+        stub_client.get("/calendar/meetings.ics", params={"congress": 118}).status_code
+        == 422
+    )
+
+
+def test_locks_are_per_congress():
+    """One congress's cold load must not stall requests for another."""
+    locks = CongressLocks()
+    assert locks.get(119) is locks.get(119)
+    assert locks.get(119) is not locks.get(118)
+
+
+def test_routes_serve_stale_instead_of_500_when_a_refresh_fails(monkeypatch):
+    """The HTTP boundary, not just the client: a failed refresh must not 500.
+
+    Previously CongressApiError propagated out of the route and FastAPI turned
+    it into a bare 500 for every calendar subscriber and page load.
+    """
+    from fastapi.testclient import TestClient
+
+    from congress_calendar.app import create_app
+
+    monkeypatch.setenv("CONGRESS_API_KEY", "test-key")
+    calls = {"n": 0}
+    good = [
+        {
+            "eventId": "1",
+            "date": "2026-09-01T14:00:00Z",
+            "title": "Hearing",
+            "chamber": "Senate",
+            "committees": [],
+        }
+    ]
+
+    async def flaky(self, congress):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return good
+        raise CongressApiError("OVER_RATE_LIMIT", "boom")
+
+    monkeypatch.setattr(
+        "congress_calendar.congress_client.CongressClient.fetch_meetings", flaky
+    )
+    with TestClient(create_app()) as c:
+        assert c.get("/api/meetings").status_code == 200
+
+        c.app.state.cache._cache.clear()  # expire the entry as the TTL would
+
+        resp = c.get("/api/meetings")
+        assert resp.status_code == 200, "must serve stale, not 500"
+        assert [m["event_id"] for m in resp.json()["meetings"]] == ["1"]
+
+        ics = c.get("/calendar/meetings.ics")
+        assert ics.status_code == 200
+        assert ics.text.count("BEGIN:VEVENT") == 1

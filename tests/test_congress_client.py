@@ -8,8 +8,13 @@ throttled Senate list call produced a House-only calendar with no error.
 import httpx
 import pytest
 
+from congress_calendar.cache import DetailCache
 from congress_calendar.config import Settings
-from congress_calendar.congress_client import CongressApiError, CongressClient
+from congress_calendar.congress_client import (
+    CongressApiError,
+    CongressClient,
+    IncompleteFetchError,
+)
 from congress_calendar.meeting_query import parse_meetings
 
 RATE_LIMIT_BODY = {
@@ -138,7 +143,7 @@ async def test_missing_detail_payload_drops_only_that_meeting():
 
     def handler(request):
         if _is_list_call(request):
-            count = 3 if _chamber_of(request) == "senate" else 0
+            count = 20 if _chamber_of(request) == "senate" else 0
             return httpx.Response(200, json=_list_body("senate", count))
         if request.url.path.endswith("/1"):
             return httpx.Response(200, json={})
@@ -147,7 +152,8 @@ async def test_missing_detail_payload_drops_only_that_meeting():
 
     client = _client(handler)
     meetings = await client.fetch_meetings(119)
-    assert len(meetings) == 2
+    # One unusable record out of twenty is well under the tolerated fraction.
+    assert len(meetings) == 19
     await client._client.aclose()
 
 
@@ -165,3 +171,65 @@ def test_parse_meetings_survives_a_null_date():
     ]
     meetings = parse_meetings(raw, 119)
     assert [m.event_id for m in meetings] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_losing_most_detail_records_is_not_served_as_a_full_calendar():
+    """A systemic detail failure must raise, not quietly return a short list.
+
+    Returning it would let a fraction of the calendar be cached as if it were
+    all of it — the exact "sparse calendar, no error" failure this all began
+    with, arriving through the transport layer instead of the envelope.
+    """
+
+    def handler(request):
+        if _is_list_call(request):
+            count = 20 if _chamber_of(request) == "senate" else 0
+            return httpx.Response(200, json=_list_body("senate", count))
+        return httpx.Response(200, json={})  # every detail unusable
+
+    client = _client(handler)
+    with pytest.raises(IncompleteFetchError):
+        await client.fetch_meetings(119)
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_record_without_an_update_date_is_never_cached():
+    """Without updateDate the key can't change, so a cached copy would be frozen.
+
+    Congress.gov bumps updateDate whenever a record changes; that is the whole
+    basis for a cache with no expiry. A record missing it has no such guarantee,
+    so it must be refetched rather than pinned forever.
+    """
+    detail_calls: list[str] = []
+
+    def handler(request):
+        if _is_list_call(request):
+            if _chamber_of(request) == "house":
+                return httpx.Response(200, json={"committeeMeetings": [], "pagination": {}})
+            return httpx.Response(
+                200,
+                json={
+                    "committeeMeetings": [
+                        {
+                            "eventId": "5",
+                            "updateDate": None,
+                            "url": "https://api.congress.gov/v3/committee-meeting/119/senate/5?format=json",
+                        }
+                    ],
+                    "pagination": {"count": 1},
+                },
+            )
+        detail_calls.append(request.url.path)
+        return httpx.Response(200, json=_detail_body(5, "senate"))
+
+    details = DetailCache()
+    for _ in range(2):
+        client = _client(handler)
+        client.details = details
+        await client.fetch_meetings(119)
+        await client._client.aclose()
+
+    assert len(detail_calls) == 2, "a keyless record must be refetched, not frozen"
+    assert len(details) == 0

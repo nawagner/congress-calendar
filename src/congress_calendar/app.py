@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
-from .cache import DetailCache, MeetingCache
+from .cache import CongressLocks, DetailCache, MeetingCache
 from .config import Settings
 from .meeting_query import fetch_into_cache
 from .middleware import RequestLoggingMiddleware
@@ -67,7 +67,7 @@ async def _warm_cache(app: FastAPI) -> None:
             settings,
             app.state.cache,
             app.state.details,
-            app.state.fetch_lock,
+            app.state.locks,
             settings.default_congress,
         )
     except asyncio.CancelledError:
@@ -95,8 +95,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # given updateDate, so each half-hourly refresh only fetches what changed.
     app.state.details = DetailCache()
     # Guards the cold fetch so a request arriving mid-warm-up waits for it
-    # rather than starting a second one.
-    app.state.fetch_lock = asyncio.Lock()
+    # rather than starting a second one — per congress, so one cold load
+    # can't stall requests for another.
+    app.state.locks = CongressLocks()
 
     warm_task: asyncio.Task[None] | None = None
     if settings.warm_cache_on_startup:
