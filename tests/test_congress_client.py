@@ -1,0 +1,235 @@
+"""Client-level regression tests for silently-dropped meetings.
+
+Congress.gov reports rate limits and bad keys in the response *body* under
+HTTP 200. Before these tests, such a body parsed as "zero meetings" — so a
+throttled Senate list call produced a House-only calendar with no error.
+"""
+
+import httpx
+import pytest
+
+from congress_calendar.cache import DetailCache
+from congress_calendar.config import Settings
+from congress_calendar.congress_client import (
+    CongressApiError,
+    CongressClient,
+    IncompleteFetchError,
+)
+from congress_calendar.meeting_query import parse_meetings
+
+RATE_LIMIT_BODY = {
+    "error": {"code": "OVER_RATE_LIMIT", "message": "You have exceeded your rate limit."}
+}
+BAD_KEY_BODY = {"error": {"code": "API_KEY_INVALID", "message": "Invalid API key."}}
+
+
+def _settings(**kwargs):
+    return Settings(congress_api_key="test-key", retry_base_delay=0, **kwargs)
+
+
+def _client(handler, **kwargs):
+    settings = _settings(**kwargs)
+    client = CongressClient(settings)
+    client._client = httpx.AsyncClient(
+        base_url=settings.congress_api_base_url,
+        transport=httpx.MockTransport(handler),
+    )
+    return client
+
+
+def _list_body(chamber, count):
+    return {
+        "committeeMeetings": [
+            {"url": f"https://api.congress.gov/v3/committee-meeting/119/{chamber}/{i}?format=json"}
+            for i in range(count)
+        ],
+        "pagination": {"count": count},
+    }
+
+
+def _detail_body(event_id, chamber):
+    return {
+        "committeeMeeting": {
+            "eventId": str(event_id),
+            "date": "2026-09-01T14:00:00Z",
+            "title": "Hearing",
+            "chamber": chamber.title(),
+            "committees": [],
+        }
+    }
+
+
+def _is_list_call(request):
+    # /v3/committee-meeting/{congress}/{chamber} — details carry an extra segment
+    return request.url.path.rstrip("/").count("/") == 4
+
+
+def _chamber_of(request):
+    return "senate" if "/senate" in request.url.path else "house"
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_list_call_raises_instead_of_emptying_a_chamber():
+    """A throttled Senate list must not silently yield a House-only calendar."""
+
+    def handler(request):
+        if "/senate" in request.url.path:
+            return httpx.Response(200, json=RATE_LIMIT_BODY)
+        if _is_list_call(request):
+            return httpx.Response(200, json=_list_body("house", 1))
+        return httpx.Response(200, json=_detail_body(1, "house"))
+
+    client = _client(handler, max_retries=1)
+    with pytest.raises(CongressApiError) as exc:
+        await client.fetch_meetings(119)
+    assert exc.value.code == "OVER_RATE_LIMIT"
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_detail_call_raises_instead_of_dropping_meetings():
+    """Throttled detail lookups must not quietly shrink the calendar."""
+
+    def handler(request):
+        if _is_list_call(request):
+            return httpx.Response(200, json=_list_body("senate", 3))
+        return httpx.Response(200, json=RATE_LIMIT_BODY)
+
+    client = _client(handler, max_retries=1)
+    with pytest.raises(CongressApiError):
+        await client.fetch_meetings(119)
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_error_body_under_http_200_is_not_treated_as_data():
+    """A non-retryable error envelope must raise, not parse as zero meetings."""
+
+    def handler(request):
+        return httpx.Response(200, json=BAD_KEY_BODY)
+
+    client = _client(handler)
+    with pytest.raises(CongressApiError) as exc:
+        await client.fetch_meetings(119)
+    assert exc.value.code == "API_KEY_INVALID"
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_is_retried_then_succeeds():
+    """The backoff path must fire for body-reported limits, not just HTTP 429."""
+    calls = {"n": 0}
+
+    def handler(request):
+        if _is_list_call(request):
+            if _chamber_of(request) == "house":
+                return httpx.Response(200, json=_list_body("house", 0))
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(200, json=RATE_LIMIT_BODY)
+            return httpx.Response(200, json=_list_body("senate", 1))
+        return httpx.Response(200, json=_detail_body(0, "senate"))
+
+    client = _client(handler, max_retries=2)
+    meetings = await client.fetch_meetings(119)
+    assert calls["n"] == 2
+    assert len(meetings) == 1
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_missing_detail_payload_drops_only_that_meeting():
+    """A single unusable record is skipped; the rest of the calendar survives."""
+
+    def handler(request):
+        if _is_list_call(request):
+            count = 20 if _chamber_of(request) == "senate" else 0
+            return httpx.Response(200, json=_list_body("senate", count))
+        if request.url.path.endswith("/1"):
+            return httpx.Response(200, json={})
+        event_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=_detail_body(event_id, "senate"))
+
+    client = _client(handler)
+    meetings = await client.fetch_meetings(119)
+    # One unusable record out of twenty is well under the tolerated fraction.
+    assert len(meetings) == 19
+    await client._client.aclose()
+
+
+def test_parse_meetings_survives_a_null_date():
+    """A null `date` used to raise TypeError and 500 the whole request."""
+    raw = [
+        {"eventId": "1", "date": None, "chamber": "Senate"},
+        {
+            "eventId": "2",
+            "date": "2026-09-01T14:00:00Z",
+            "title": "Hearing",
+            "chamber": "Senate",
+            "committees": [],
+        },
+    ]
+    meetings = parse_meetings(raw, 119)
+    assert [m.event_id for m in meetings] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_losing_most_detail_records_is_not_served_as_a_full_calendar():
+    """A systemic detail failure must raise, not quietly return a short list.
+
+    Returning it would let a fraction of the calendar be cached as if it were
+    all of it — the exact "sparse calendar, no error" failure this all began
+    with, arriving through the transport layer instead of the envelope.
+    """
+
+    def handler(request):
+        if _is_list_call(request):
+            count = 20 if _chamber_of(request) == "senate" else 0
+            return httpx.Response(200, json=_list_body("senate", count))
+        return httpx.Response(200, json={})  # every detail unusable
+
+    client = _client(handler)
+    with pytest.raises(IncompleteFetchError):
+        await client.fetch_meetings(119)
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_record_without_an_update_date_is_never_cached():
+    """Without updateDate the key can't change, so a cached copy would be frozen.
+
+    Congress.gov bumps updateDate whenever a record changes; that is the whole
+    basis for a cache with no expiry. A record missing it has no such guarantee,
+    so it must be refetched rather than pinned forever.
+    """
+    detail_calls: list[str] = []
+
+    def handler(request):
+        if _is_list_call(request):
+            if _chamber_of(request) == "house":
+                return httpx.Response(200, json={"committeeMeetings": [], "pagination": {}})
+            return httpx.Response(
+                200,
+                json={
+                    "committeeMeetings": [
+                        {
+                            "eventId": "5",
+                            "updateDate": None,
+                            "url": "https://api.congress.gov/v3/committee-meeting/119/senate/5?format=json",
+                        }
+                    ],
+                    "pagination": {"count": 1},
+                },
+            )
+        detail_calls.append(request.url.path)
+        return httpx.Response(200, json=_detail_body(5, "senate"))
+
+    details = DetailCache()
+    for _ in range(2):
+        client = _client(handler)
+        client.details = details
+        await client.fetch_meetings(119)
+        await client._client.aclose()
+
+    assert len(detail_calls) == 2, "a keyless record must be refetched, not frozen"
+    assert len(details) == 0
