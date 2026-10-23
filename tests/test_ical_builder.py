@@ -113,3 +113,23 @@ def test_multiple_meetings():
     cal = build_calendar(meetings)
     ical = cal.to_ical().decode()
     assert ical.count("BEGIN:VEVENT") == 2
+
+
+def test_duplicate_committees_from_the_api_are_collapsed():
+    """Congress.gov sometimes lists one committee twice on a meeting."""
+    meeting = CommitteeMeeting.from_api_response(
+        {
+            "eventId": "338781",
+            "date": "2026-09-30T14:15:00Z",
+            "title": "Nominations",
+            "chamber": "Senate",
+            "committees": [
+                {"name": "Judiciary Committee", "systemCode": "ssju00"},
+                {"name": "Judiciary Committee", "systemCode": "ssju00"},
+            ],
+        },
+        119,
+    )
+    assert [c.system_code for c in meeting.committees] == ["ssju00"]
+    ical = build_calendar([meeting]).to_ical().decode()
+    assert "Judiciary Committee, Judiciary Committee" not in ical
