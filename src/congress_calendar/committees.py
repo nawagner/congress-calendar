@@ -31,6 +31,11 @@ COMMITTEES_119: list[dict[str, str]] = [
     {"name": "Ethics (Select)", "system_code": "slet00", "chamber": "senate"},
     {"name": "Indian Affairs", "system_code": "slia00", "chamber": "senate"},
     {"name": "Intelligence (Select)", "system_code": "slin00", "chamber": "senate"},
+    {
+        "name": "International Narcotics Control (Caucus)",
+        "system_code": "scnc00",
+        "chamber": "senate",
+    },
     # House Standing Committees
     {"name": "Agriculture", "system_code": "hsag00", "chamber": "house"},
     {"name": "Appropriations", "system_code": "hsap00", "chamber": "house"},
@@ -54,4 +59,43 @@ COMMITTEES_119: list[dict[str, str]] = [
     {"name": "Ways and Means", "system_code": "hswm00", "chamber": "house"},
     # House Select Committees
     {"name": "Intelligence (Permanent Select)", "system_code": "hlig00", "chamber": "house"},
+    {
+        "name": "Strategic Competition with the CCP (Select)",
+        "system_code": "hlzs00",
+        "chamber": "house",
+    },
+    {
+        "name": "January 6 Investigation (Select Subcommittee)",
+        "system_code": "hlqj00",
+        "chamber": "house",
+    },
 ]
+
+_BY_CODE = {c["system_code"]: c for c in COMMITTEES_119}
+
+
+def fallback_committee_name(system_code: str) -> str | None:
+    """A display name for a committee code, for records that arrive without one.
+
+    Congress.gov sometimes lists a committee by ``systemCode`` alone. A parent
+    code resolves to its own name; a subcommittee code ("hspw07") only tells us
+    its parent ("hspw00"), so it is named as a subcommittee of that.
+    """
+    code = system_code.lower()
+    if len(code) < 3:
+        return None
+    exact = _BY_CODE.get(code)
+    if exact is not None:
+        return _with_chamber(exact)
+    parent = _BY_CODE.get(code[:-2] + "00")
+    if parent is not None:
+        return f"{_with_chamber(parent)} Subcommittee"
+    return None
+
+
+def _with_chamber(committee: dict[str, str]) -> str:
+    # Matches how Congress.gov names committees ("House Education and
+    # Workforce"), without doubling up on "House Administration".
+    chamber = committee["chamber"].title()
+    name = committee["name"]
+    return name if name.startswith(chamber) else f"{chamber} {name}"

@@ -65,6 +65,7 @@ calendar is a shareable link: `/?chamber=senate&committee=ssju00`.
 | `DETAIL_CONCURRENCY` | no | 75 | Parallel detail fetches during a cold load |
 | `WARM_CACHE_ON_STARTUP` | no | true | Fill the cache on boot instead of on first request |
 | `SUPPORTED_CONGRESSES` | no | `[119]` | Congresses the API will fetch; others are rejected |
+| `MAX_RETRY_DELAY` | no | 30 | Longest `Retry-After` (seconds) worth waiting out; longer ones fail fast so cached data is served |
 
 ## Deployment
 
@@ -78,8 +79,9 @@ railway variables set CONGRESS_API_KEY=<your-key>
 ## Development
 
 ```bash
-# Run tests (test_calendar_feed.py hits the live API and needs a key;
-# the rest run offline against stubbed data)
+# Run tests (test_calendar_feed.py hits the live API and needs a key; it
+# shares one cold load, ~2,750 requests of the 20,000/hour budget, so avoid
+# running it against the key production uses. The rest run offline.)
 pytest
 
 # Lint

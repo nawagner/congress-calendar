@@ -3,9 +3,12 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+from .committees import fallback_committee_name
 
 _EVENT_URL_CHAMBERS = {"house", "senate"}
+UNKNOWN_COMMITTEE = "Unknown Committee"
 
 
 def format_location(building: str, room: str) -> str:
@@ -30,6 +33,14 @@ def ordinal(n: int) -> str:
 class CommitteeInfo(BaseModel):
     name: str
     system_code: str
+
+    @model_validator(mode="after")
+    def _name_from_code(self) -> "CommitteeInfo":
+        # Congress.gov leaves `name` off some committee entries; without this the
+        # feed titles those meetings "[H] Unknown Committee".
+        if not self.name or self.name == UNKNOWN_COMMITTEE:
+            self.name = fallback_committee_name(self.system_code) or UNKNOWN_COMMITTEE
+        return self
 
 
 class CommitteeMeeting(BaseModel):
