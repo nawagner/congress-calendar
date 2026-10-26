@@ -130,15 +130,17 @@ class CongressClient:
                     delay = float(retry_after)
                 except (ValueError, TypeError):
                     pass
-            if delay > self.settings.max_retry_delay:
-                # The hourly budget is spent and won't refill for many minutes.
-                # Sleeping here would hold the per-congress lock the whole time,
-                # stalling every request instead of serving the last good copy.
-                raise CongressApiError(
-                    "OVER_RATE_LIMIT",
-                    f"Rate limit exceeded on {endpoint}; upstream asked us to wait "
-                    f"{delay:.0f}s",
-                )
+                else:
+                    if delay > self.settings.max_retry_delay:
+                        # The hourly budget is spent and won't refill for many
+                        # minutes. Sleeping here would hold the per-congress lock
+                        # the whole time, stalling every request instead of
+                        # serving the last good copy.
+                        raise CongressApiError(
+                            "OVER_RATE_LIMIT",
+                            f"Rate limit exceeded on {endpoint}; upstream asked us "
+                            f"to wait {delay:.0f}s",
+                        )
             logger.warning(
                 "Rate limited on %s (attempt %d/%d), retrying in %.1fs",
                 endpoint,

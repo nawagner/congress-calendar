@@ -45,6 +45,14 @@ def test_unrecognised_code_without_a_name_stays_unknown():
     assert meeting.committees[0].name == "Unknown Committee"
 
 
+def test_null_committee_fields_do_not_drop_the_meeting():
+    """A JSON null used to fail validation and skip the whole meeting."""
+    meeting = _meeting([{"name": None, "systemCode": "hsha00"}])
+    assert meeting.committees[0].name == "House Administration"
+    meeting = _meeting([{"name": "Judiciary", "systemCode": None}])
+    assert meeting.committees[0].system_code == ""
+
+
 def _client(handler, **kwargs):
     settings = Settings(congress_api_key="test-key", retry_base_delay=0, **kwargs)
     client = CongressClient(settings)
@@ -97,12 +105,17 @@ async def test_a_meeting_listed_twice_is_fetched_and_served_once():
 
 
 @pytest.mark.asyncio
-async def test_a_long_retry_after_fails_fast_instead_of_sleeping():
+async def test_a_long_retry_after_fails_fast_instead_of_sleeping(monkeypatch):
     """A spent hourly budget came back with Retry-After: 1765.
 
     Honouring it held the cache lock for ~30 minutes per attempt, so every
     request hung instead of falling back to the last good calendar.
     """
+
+    async def no_sleeping(delay):
+        raise AssertionError(f"slept {delay}s instead of failing fast")
+
+    monkeypatch.setattr("congress_calendar.congress_client.asyncio.sleep", no_sleeping)
     calls = {"n": 0}
 
     def handler(request):
@@ -130,4 +143,33 @@ async def test_a_short_retry_after_is_still_honoured():
     client = _client(handler, max_retries=3)
     await client.get("/committee-meeting/119/senate")
     assert calls["n"] == 2
+    await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_own_backoff_without_retry_after_is_not_cut_short(monkeypatch):
+    """The cap is for upstream's Retry-After, not the client's own backoff."""
+    slept = []
+
+    async def record(delay):
+        slept.append(delay)
+
+    monkeypatch.setattr("congress_calendar.congress_client.asyncio.sleep", record)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, json={"committeeMeetings": []})
+
+    client = CongressClient(
+        Settings(congress_api_key="test-key", retry_base_delay=60, max_retries=1)
+    )
+    client._client = httpx.AsyncClient(
+        base_url=client.settings.congress_api_base_url,
+        transport=httpx.MockTransport(handler),
+    )
+    await client.get("/committee-meeting/119/senate")
+    assert slept == [60]
     await client._client.aclose()
