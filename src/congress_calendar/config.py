@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     warm_cache_on_startup: bool = True
     max_retries: int = 3
     retry_base_delay: float = 1.0
+    # A Retry-After longer than this means the hourly budget is gone; fail fast
+    # so callers fall back to cached data rather than hanging for half an hour.
+    max_retry_delay: float = 30.0
 
     base_url: str = ""
 

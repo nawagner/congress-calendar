@@ -1,5 +1,24 @@
 """Integration tests — hits the live Congress.gov API."""
 
+import pytest
+from fastapi.testclient import TestClient
+
+from congress_calendar.app import create_app
+
+
+@pytest.fixture(scope="module")
+def client():
+    """One app for the whole module, so the Congress is enumerated only once.
+
+    A cold load costs a detail request per meeting in the Congress (~2,750 in
+    late 2026). A fresh app per test repeated that for every test and burned
+    through the key's 20,000-request hourly budget in a single run.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("WARM_CACHE_ON_STARTUP", "false")
+        with TestClient(create_app()) as c:
+            yield c
+
 
 def test_health(client):
     resp = client.get("/health")

@@ -130,6 +130,17 @@ class CongressClient:
                     delay = float(retry_after)
                 except (ValueError, TypeError):
                     pass
+                else:
+                    if delay > self.settings.max_retry_delay:
+                        # The hourly budget is spent and won't refill for many
+                        # minutes. Sleeping here would hold the per-congress lock
+                        # the whole time, stalling every request instead of
+                        # serving the last good copy.
+                        raise CongressApiError(
+                            "OVER_RATE_LIMIT",
+                            f"Rate limit exceeded on {endpoint}; upstream asked us "
+                            f"to wait {delay:.0f}s",
+                        )
             logger.warning(
                 "Rate limited on %s (attempt %d/%d), retrying in %.1fs",
                 endpoint,
@@ -263,12 +274,33 @@ class CongressClient:
         )
         logger.info("Listed %d house and %d senate meetings", len(house), len(senate))
 
+        items = _dedupe_listed(house + senate)
         self._detail_fetches = 0
-        enriched = await self._enrich_meetings(house + senate)
+        enriched = await self._enrich_meetings(items)
         logger.info(
             "Enriched %d meetings (%d fetched, %d served from detail cache)",
             len(enriched),
             self._detail_fetches,
-            len(enriched) - self._detail_fetches,
+            len(items) - self._detail_fetches,
         )
         return enriched
+
+
+def _dedupe_listed(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop repeated list entries, keeping the most recently updated copy.
+
+    The list endpoint can return one meeting twice (Senate event 337761 did),
+    which would otherwise put two events with the same UID in every feed.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = str(item.get("url") or "").split("?", 1)[0] or str(item.get("eventId") or "")
+        if not key:
+            latest[f"#{len(latest)}"] = item
+            continue
+        seen = latest.get(key)
+        if seen is None or str(item.get("updateDate") or "") > str(seen.get("updateDate") or ""):
+            latest[key] = item
+    if len(latest) < len(items):
+        logger.info("Ignored %d duplicate meeting list entries", len(items) - len(latest))
+    return list(latest.values())

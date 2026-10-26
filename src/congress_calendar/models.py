@@ -3,9 +3,12 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+from .committees import fallback_committee_name
 
 _EVENT_URL_CHAMBERS = {"house", "senate"}
+UNKNOWN_COMMITTEE = "Unknown Committee"
 
 
 def format_location(building: str, room: str) -> str:
@@ -30,6 +33,20 @@ def ordinal(n: int) -> str:
 class CommitteeInfo(BaseModel):
     name: str
     system_code: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _name_from_code(cls, data: Any) -> Any:
+        # Congress.gov leaves `name` off some committee entries; without this the
+        # feed titles those meetings "[H] Unknown Committee". A JSON null in either
+        # field would otherwise fail validation and drop the whole meeting.
+        if isinstance(data, dict):
+            code = data.get("system_code") or ""
+            name = data.get("name")
+            if not name or name == UNKNOWN_COMMITTEE:
+                name = fallback_committee_name(code) or UNKNOWN_COMMITTEE
+            data = {**data, "name": name, "system_code": code}
+        return data
 
 
 class CommitteeMeeting(BaseModel):
