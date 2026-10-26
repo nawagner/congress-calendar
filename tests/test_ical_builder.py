@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+from icalendar import Calendar
+
 from congress_calendar.ical_builder import build_calendar, calendar_to_bytes
 from congress_calendar.models import CommitteeInfo, CommitteeMeeting
 
@@ -131,5 +133,7 @@ def test_duplicate_committees_from_the_api_are_collapsed():
         119,
     )
     assert [c.system_code for c in meeting.committees] == ["ssju00"]
-    ical = build_calendar([meeting]).to_ical().decode()
-    assert "Judiciary Committee, Judiciary Committee" not in ical
+    # Parse the feed back rather than searching the raw text: iCal escapes the
+    # comma as "\," and folds long lines, so a plain substring never matches.
+    event = Calendar.from_ical(build_calendar([meeting]).to_ical()).walk("VEVENT")[0]
+    assert str(event["description"]).count("Judiciary Committee") == 1
