@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     default_congress: int | None = None
     # Each distinct congress costs a full enumeration, so only a few may be
     # requested. Without this, `congress` is a public query param that can be
-    # walked to force ~200 cold loads. Unset means only what the default view
-    # loads anyway (see `meeting_query.supported_congresses`).
+    # walked to force ~200 cold loads. The current and previous Congress are
+    # always allowed; these are extra (see `meeting_query.supported_congresses`).
     supported_congresses: set[int] | None = None
     cache_ttl_minutes: int = 30
     days_ahead: int = 30

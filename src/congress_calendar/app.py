@@ -64,17 +64,16 @@ async def _warm_cache(app: FastAPI) -> None:
     settings: Settings = app.state.settings
     started = time.perf_counter()
     # Warm whatever the default view will ask for: two Congresses in the
-    # month after one convenes, one the rest of the time.
+    # month after one convenes, one the rest of the time. Current first, so a
+    # failure on the expensive outgoing load can't leave it cold.
     today = today_in_et()
     congresses = window_congresses(
-        settings,
-        today - timedelta(days=settings.days_behind),
-        today + timedelta(days=settings.days_ahead),
-        today,
+        settings, today - timedelta(days=settings.days_behind), today
     )
+    warmed: list[str] = []
     total = 0
-    try:
-        for congress in congresses:
+    for congress in sorted(congresses, reverse=True):
+        try:
             meetings = await fetch_into_cache(
                 settings,
                 app.state.cache,
@@ -82,20 +81,26 @@ async def _warm_cache(app: FastAPI) -> None:
                 app.state.locks,
                 congress,
             )
-            total += len(meetings)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # A failed warm-up costs latency, not correctness — the first request
-        # will fetch for itself. Never take the app down over it.
-        logger.exception("Cache warm-up failed; the first request will fetch instead")
-        return
-    logger.info(
-        "Warmed cache with %d meetings from congress %s in %.1fs",
-        total,
-        ", ".join(str(c) for c in congresses),
-        time.perf_counter() - started,
-    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A failed warm-up costs latency, not correctness — the first
+            # request will fetch for itself. Never take the app down over it.
+            logger.exception(
+                "Cache warm-up failed for congress %d; the first request will "
+                "fetch instead",
+                congress,
+            )
+            continue
+        warmed.append(str(congress))
+        total += len(meetings)
+    if warmed:
+        logger.info(
+            "Warmed cache with %d meetings from congress %s in %.1fs",
+            total,
+            ", ".join(warmed),
+            time.perf_counter() - started,
+        )
 
 
 @asynccontextmanager

@@ -63,17 +63,28 @@ async def load_meetings(
             )
         congresses = [congress]
     else:
-        congresses = window_congresses(settings, start, end, today)
+        congresses = window_congresses(settings, start, today)
 
+    reported = congress if congress is not None else current_congress(settings, today)
     meetings: list[CommitteeMeeting] = []
     for number in congresses:
-        raw_meetings = await fetch_into_cache(
-            settings,
-            cache,
-            request.app.state.details,
-            request.app.state.locks,
-            number,
-        )
+        try:
+            raw_meetings = await fetch_into_cache(
+                settings,
+                cache,
+                request.app.state.details,
+                request.app.state.locks,
+                number,
+            )
+        except Exception:
+            if number == reported:
+                raise
+            # The outgoing Congress only adds the tail of a window that reaches
+            # back past January 3. Losing it beats failing the whole calendar.
+            logger.exception(
+                "Could not load congress %d; serving the window without it", number
+            )
+            continue
         meetings.extend(parse_meetings(raw_meetings, number))
 
     from_date = start.isoformat()
@@ -83,7 +94,7 @@ async def load_meetings(
         meetings = [m for m in meetings if m.chamber == chamber]
 
     return MeetingWindow(
-        congress=congress if congress is not None else current_congress(settings, today),
+        congress=reported,
         from_date=from_date,
         to_date=to_date,
         meetings=meetings,
@@ -96,40 +107,35 @@ def today_in_et() -> date:
 
 def current_congress(settings: Settings, today: date) -> int:
     """The default Congress: pinned by config, else the one sitting today."""
-    return settings.default_congress or congress_on(today)
+    if settings.default_congress is not None:
+        return settings.default_congress
+    return congress_on(today)
 
 
 def supported_congresses(settings: Settings, today: date) -> set[int]:
     """Congresses an explicit `congress` param may name.
 
-    By default only those the default view loads anyway, so naming one never
-    costs an extra enumeration: the current Congress, plus the outgoing one
-    while the default window still reaches back past January 3.
+    The current Congress and the one before it, plus any SUPPORTED_CONGRESSES.
+    That caps what the public param can force at one extra enumeration.
     """
     now = current_congress(settings, today)
-    if settings.supported_congresses is not None:
-        return settings.supported_congresses | {now}
-    if settings.default_congress is not None:
-        return {now}
-    earliest = congress_on(today - timedelta(days=settings.days_behind))
-    return set(range(max(earliest, now - 1), now + 1))
+    automatic = {now} if settings.default_congress is not None else {now - 1, now}
+    return automatic | (settings.supported_congresses or set())
 
 
-def window_congresses(settings: Settings, start: date, end: date, today: date) -> list[int]:
+def window_congresses(settings: Settings, start: date, today: date) -> list[int]:
     """Congresses to load for a date window when no `congress` is given.
 
-    A window reaching back past January 3 of an odd year spans the outgoing
-    Congress too; without it, the month after the 120th convenes would drop
-    the 119th's last meetings. A pinned default loads only that Congress.
+    A window starting before January 3 of an odd year reaches into the
+    outgoing Congress too; without it, a window looking back across the switch
+    would drop the 119th's last meetings. Judged from the request's own start,
+    so a wide window keeps them after the first month too. Never more than the
+    current Congress and the one before it; a pinned default loads only itself.
     """
     if settings.default_congress is not None:
         return [settings.default_congress]
-    allowed = supported_congresses(settings, today)
-    return [
-        number
-        for number in range(congress_on(start), congress_on(end) + 1)
-        if number in allowed
-    ]
+    now = congress_on(today)
+    return list(range(max(congress_on(start), now - 1), now + 1))
 
 
 async def fetch_into_cache(

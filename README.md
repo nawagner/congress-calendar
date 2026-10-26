@@ -65,7 +65,7 @@ calendar is a shareable link: `/?chamber=senate&committee=ssju00`.
 | `DETAIL_CONCURRENCY` | no | 75 | Parallel detail fetches during a cold load |
 | `WARM_CACHE_ON_STARTUP` | no | true | Fill the cache on boot instead of on first request |
 | `DEFAULT_CONGRESS` | no | from the date | Pin the default view to one Congress instead of following the calendar |
-| `SUPPORTED_CONGRESSES` | no | what the default view loads | Congresses the `congress` param may name; others are rejected |
+| `SUPPORTED_CONGRESSES` | no | `[]` | Extra Congresses the `congress` param may name, on top of the current and previous ones; others are rejected |
 | `MAX_RETRY_DELAY` | no | 30 | Longest `Retry-After` (seconds) worth waiting out; longer ones fail fast so cached data is served |
 
 ## Deployment
@@ -147,13 +147,15 @@ an already expensive job and can breach the hourly API budget. That lock is per
 congress, so one cold load never stalls requests for another.
 
 The Congress number comes from the date: each Congress convenes on January 3
-of an odd year, so the 120th takes over on 2027-01-03 with no deploy. For the
-`days_behind` days after that, the default window still reaches back into the
-outgoing Congress, so the app loads both (and the boot warm-up does too, at
-roughly twice the usual cold-load cost that month).
+of an odd year, so the 120th takes over on 2027-01-03 with no deploy. A window
+that starts before that date reaches into the outgoing Congress, so the app
+loads both: by default for the `days_behind` days after the switch, and for as
+long as a wider `days_behind` reaches back across it. The boot warm-up loads
+whatever the default window needs, at roughly twice the usual cold-load cost
+that first month.
 
 Because each congress costs a full enumeration, `congress` only accepts the
-Congresses the default view already loads (or `SUPPORTED_CONGRESSES`, if set);
+current Congress and the previous one, plus any in `SUPPORTED_CONGRESSES`;
 anything else is a 422 and costs no API calls.
 
 Measured on a deployment: ~98s cold with no warm-up, versus ~1.4s for a TTL
