@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query, Request, Response
 
-from ..committees import COMMITTEES_119
+from ..committees import COMMITTEES
 from ..ical_builder import build_calendar, calendar_to_bytes
 from ..meeting_query import filter_by_committee, load_meetings
 
@@ -43,7 +43,7 @@ async def meetings_ics(
 
 
 _COMMITTEE_NAMES: dict[str, str] = {
-    c["system_code"]: c["name"] for c in COMMITTEES_119
+    c["system_code"]: c["name"] for c in COMMITTEES
 }
 
 _MAX_LISTED = 3

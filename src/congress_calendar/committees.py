@@ -1,6 +1,15 @@
-"""Static committee data for the 119th Congress (2025-2027)."""
+"""Static committee data, as organized in the 119th Congress (2025-2027).
 
-COMMITTEES_119: list[dict[str, str]] = [
+System codes are stable from one Congress to the next (every code below except
+``hlqj00``, a select subcommittee the 119th created, was already in use in the
+118th), so this list keeps working when the 120th convenes on 2027-01-03.
+What can change is the set of select committees and subcommittees, which each
+Congress may create or let lapse: a new one shows up in the agenda under the
+name Congress.gov gives it but has no toggle until it is added here, and a
+lapsed one simply stops having meetings.
+"""
+
+COMMITTEES: list[dict[str, str]] = [
     # Senate Standing Committees
     {"name": "Agriculture, Nutrition, and Forestry", "system_code": "ssaf00", "chamber": "senate"},
     {"name": "Appropriations", "system_code": "ssap00", "chamber": "senate"},
@@ -71,7 +80,7 @@ COMMITTEES_119: list[dict[str, str]] = [
     },
 ]
 
-_BY_CODE = {c["system_code"]: c for c in COMMITTEES_119}
+_BY_CODE = {c["system_code"]: c for c in COMMITTEES}
 
 
 def fallback_committee_name(system_code: str) -> str | None:

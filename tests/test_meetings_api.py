@@ -2,14 +2,16 @@
 
 from datetime import UTC, datetime
 
-from congress_calendar.models import CommitteeMeeting
+from congress_calendar.config import congress_on
+from congress_calendar.meeting_query import today_in_et
+from congress_calendar.models import CommitteeMeeting, ordinal
 
 
 def test_returns_window_and_meetings(stub_client):
     resp = stub_client.get("/api/meetings")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["congress"] == 119
+    assert body["congress"] == congress_on(today_in_et())
     assert body["from_date"] < body["to_date"]
     assert body["count"] == 2
     assert len(body["meetings"]) == 2
@@ -24,8 +26,9 @@ def test_meeting_shape(stub_client):
     assert meeting["committees"] == [
         {"name": "Judiciary Committee", "system_code": "ssju00"}
     ]
+    congress = ordinal(congress_on(today_in_et()))
     assert meeting["url"] == (
-        "https://www.congress.gov/event/119th-congress/senate-event/118001"
+        f"https://www.congress.gov/event/{congress}-congress/senate-event/118001"
     )
 
 

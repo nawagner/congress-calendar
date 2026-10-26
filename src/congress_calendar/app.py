@@ -6,12 +6,13 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 
 from fastapi import FastAPI
 
 from .cache import CongressLocks, DetailCache, MeetingCache
 from .config import Settings
-from .meeting_query import fetch_into_cache
+from .meeting_query import fetch_into_cache, today_in_et, window_congresses
 from .middleware import RequestLoggingMiddleware
 from .routes import calendar_feed, health, landing, meetings_api
 
@@ -62,14 +63,26 @@ async def _warm_cache(app: FastAPI) -> None:
     """Fill the meeting cache on boot so no visitor pays for the cold fetch."""
     settings: Settings = app.state.settings
     started = time.perf_counter()
+    # Warm whatever the default view will ask for: two Congresses in the
+    # month after one convenes, one the rest of the time.
+    today = today_in_et()
+    congresses = window_congresses(
+        settings,
+        today - timedelta(days=settings.days_behind),
+        today + timedelta(days=settings.days_ahead),
+        today,
+    )
+    total = 0
     try:
-        meetings = await fetch_into_cache(
-            settings,
-            app.state.cache,
-            app.state.details,
-            app.state.locks,
-            settings.default_congress,
-        )
+        for congress in congresses:
+            meetings = await fetch_into_cache(
+                settings,
+                app.state.cache,
+                app.state.details,
+                app.state.locks,
+                congress,
+            )
+            total += len(meetings)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -78,8 +91,9 @@ async def _warm_cache(app: FastAPI) -> None:
         logger.exception("Cache warm-up failed; the first request will fetch instead")
         return
     logger.info(
-        "Warmed cache with %d meetings in %.1fs",
-        len(meetings),
+        "Warmed cache with %d meetings from congress %s in %.1fs",
+        total,
+        ", ".join(str(c) for c in congresses),
         time.perf_counter() - started,
     )
 
