@@ -6,7 +6,7 @@ latter. The window therefore has to be enforced locally, against the parsed
 meeting dates.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -17,6 +17,8 @@ from congress_calendar.config import Settings
 from congress_calendar.congress_client import CongressApiError, CongressClient
 from congress_calendar.meeting_query import fetch_into_cache, filter_by_date
 from congress_calendar.models import CommitteeMeeting
+
+from .conftest import _iso
 
 ET = ZoneInfo("America/New_York")
 
@@ -359,11 +361,10 @@ def test_routes_serve_stale_instead_of_500_when_a_refresh_fails(monkeypatch):
     calls = {"n": 0}
     # The routes apply the real date window, so the meeting has to sit inside
     # it whenever the test runs — a fixed date ages out and the test goes red.
-    soon = (datetime.now(UTC) + timedelta(days=1)).replace(hour=14, minute=0)
     good = [
         {
             "eventId": "1",
-            "date": soon.isoformat(),
+            "date": _iso(1, 10),
             "title": "Hearing",
             "chamber": "Senate",
             "committees": [],

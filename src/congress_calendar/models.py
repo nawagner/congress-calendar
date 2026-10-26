@@ -58,7 +58,11 @@ class CommitteeMeeting(BaseModel):
                 name=c.get("name", "Unknown Committee"),
                 system_code=c.get("systemCode", ""),
             )
-            key = (info.system_code.lower(), info.name)
+            # The system code is a committee's identity everywhere else (the
+            # committee filter, the browse UI's chips), so it decides here too;
+            # the name only stands in when a record has no code.
+            code = info.system_code.lower()
+            key = ("code", code) if code else ("name", info.name)
             if key not in seen:
                 seen.add(key)
                 committees.append(info)
