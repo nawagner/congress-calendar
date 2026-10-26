@@ -48,13 +48,24 @@ class CommitteeMeeting(BaseModel):
     def from_api_response(cls, data: dict[str, Any], congress: int) -> "CommitteeMeeting":
         """Parse a committee meeting from the Congress.gov API response."""
         location = data.get("location", {}) or {}
-        committees = [
-            CommitteeInfo(
+        # Congress.gov occasionally lists the same committee twice on one
+        # meeting, which would otherwise render as a doubled chip and a
+        # "Judiciary, Judiciary" line in the feed.
+        committees: list[CommitteeInfo] = []
+        seen: set[tuple[str, str]] = set()
+        for c in data.get("committees") or []:
+            info = CommitteeInfo(
                 name=c.get("name", "Unknown Committee"),
                 system_code=c.get("systemCode", ""),
             )
-            for c in (data.get("committees") or [])
-        ]
+            # The system code is a committee's identity everywhere else (the
+            # committee filter, the browse UI's chips), so it decides here too;
+            # the name only stands in when a record has no code.
+            code = info.system_code.lower()
+            key = ("code", code) if code else ("name", info.name)
+            if key not in seen:
+                seen.add(key)
+                committees.append(info)
 
         event_id = str(data.get("eventId", ""))
         chamber = data.get("chamber", "unknown").lower()

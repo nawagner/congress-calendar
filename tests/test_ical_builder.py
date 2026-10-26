@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+from icalendar import Calendar
+
 from congress_calendar.ical_builder import build_calendar, calendar_to_bytes
 from congress_calendar.models import CommitteeInfo, CommitteeMeeting
 
@@ -113,3 +115,50 @@ def test_multiple_meetings():
     cal = build_calendar(meetings)
     ical = cal.to_ical().decode()
     assert ical.count("BEGIN:VEVENT") == 2
+
+
+def test_duplicate_committees_from_the_api_are_collapsed():
+    """Congress.gov sometimes lists one committee twice on a meeting."""
+    meeting = CommitteeMeeting.from_api_response(
+        {
+            "eventId": "338781",
+            "date": "2026-09-30T14:15:00Z",
+            "title": "Nominations",
+            "chamber": "Senate",
+            "committees": [
+                {"name": "Judiciary Committee", "systemCode": "ssju00"},
+                {"name": "Judiciary Committee", "systemCode": "ssju00"},
+            ],
+        },
+        119,
+    )
+    assert [c.system_code for c in meeting.committees] == ["ssju00"]
+    # Parse the feed back rather than searching the raw text: iCal escapes the
+    # comma as "\," and folds long lines, so a plain substring never matches.
+    event = Calendar.from_ical(build_calendar([meeting]).to_ical()).walk("VEVENT")[0]
+    assert str(event["description"]).count("Judiciary Committee") == 1
+
+
+def test_one_committee_under_two_names_is_collapsed_by_code():
+    """The system code is the committee's identity, so differing names still merge."""
+    meeting = CommitteeMeeting.from_api_response(
+        {
+            "eventId": "338781",
+            "date": "2026-09-30T14:15:00Z",
+            "title": "Nominations",
+            "chamber": "Senate",
+            "committees": [
+                {"name": "Judiciary Committee", "systemCode": "ssju00"},
+                {"name": "Committee on the Judiciary", "systemCode": "SSJU00"},
+                {"name": "Joint Hearing"},
+                {"name": "Joint Hearing"},
+                {"name": "Another Codeless Panel"},
+            ],
+        },
+        119,
+    )
+    assert [(c.system_code, c.name) for c in meeting.committees] == [
+        ("ssju00", "Judiciary Committee"),
+        ("", "Joint Hearing"),
+        ("", "Another Codeless Panel"),
+    ]
