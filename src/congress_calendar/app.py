@@ -6,12 +6,13 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 
 from fastapi import FastAPI
 
 from .cache import CongressLocks, DetailCache, MeetingCache
 from .config import Settings
-from .meeting_query import fetch_into_cache
+from .meeting_query import fetch_into_cache, today_in_et, window_congresses
 from .middleware import RequestLoggingMiddleware
 from .routes import calendar_feed, health, landing, meetings_api
 
@@ -62,26 +63,44 @@ async def _warm_cache(app: FastAPI) -> None:
     """Fill the meeting cache on boot so no visitor pays for the cold fetch."""
     settings: Settings = app.state.settings
     started = time.perf_counter()
-    try:
-        meetings = await fetch_into_cache(
-            settings,
-            app.state.cache,
-            app.state.details,
-            app.state.locks,
-            settings.default_congress,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # A failed warm-up costs latency, not correctness — the first request
-        # will fetch for itself. Never take the app down over it.
-        logger.exception("Cache warm-up failed; the first request will fetch instead")
-        return
-    logger.info(
-        "Warmed cache with %d meetings in %.1fs",
-        len(meetings),
-        time.perf_counter() - started,
+    # Warm whatever the default view will ask for: two Congresses in the
+    # month after one convenes, one the rest of the time. Current first, so a
+    # failure on the expensive outgoing load can't leave it cold.
+    today = today_in_et()
+    congresses = window_congresses(
+        settings, today - timedelta(days=settings.days_behind), today
     )
+    warmed: list[str] = []
+    total = 0
+    for congress in sorted(congresses, reverse=True):
+        try:
+            meetings = await fetch_into_cache(
+                settings,
+                app.state.cache,
+                app.state.details,
+                app.state.locks,
+                congress,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A failed warm-up costs latency, not correctness — the first
+            # request will fetch for itself. Never take the app down over it.
+            logger.exception(
+                "Cache warm-up failed for congress %d; the first request will "
+                "fetch instead",
+                congress,
+            )
+            continue
+        warmed.append(str(congress))
+        total += len(meetings)
+    if warmed:
+        logger.info(
+            "Warmed cache with %d meetings from congress %s in %.1fs",
+            total,
+            ", ".join(warmed),
+            time.perf_counter() - started,
+        )
 
 
 @asynccontextmanager

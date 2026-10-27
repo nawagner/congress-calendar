@@ -247,10 +247,10 @@ def test_startup_warm_up_spares_the_first_request(monkeypatch):
     monkeypatch.setenv("WARM_CACHE_ON_STARTUP", "true")
     monkeypatch.setenv("CONGRESS_API_KEY", "test-key")
 
-    calls = {"n": 0}
+    calls: dict[int, int] = {}
 
     async def counting_fetch(self, congress):
-        calls["n"] += 1
+        calls[congress] = calls.get(congress, 0) + 1
         return [
             {
                 "eventId": "1",
@@ -268,7 +268,9 @@ def test_startup_warm_up_spares_the_first_request(monkeypatch):
         assert c.get("/api/meetings").status_code == 200
         assert c.get("/api/meetings").status_code == 200
 
-    assert calls["n"] == 1
+    # One fetch per congress the default view loads (two in the month after
+    # January 3, one otherwise), never a second for the same one.
+    assert calls and all(n == 1 for n in calls.values())
 
 
 async def test_a_failed_refresh_serves_the_last_good_data():
@@ -331,11 +333,15 @@ async def test_a_first_ever_fetch_failure_still_raises():
 
 def test_an_unsupported_congress_is_rejected_without_fetching(stub_client):
     """`congress` is public, and each new value costs a whole enumeration."""
-    assert stub_client.get("/api/meetings", params={"congress": 118}).status_code == 422
+    from congress_calendar.config import congress_on
+    from congress_calendar.meeting_query import today_in_et
+
+    now = congress_on(today_in_et())
+    assert stub_client.get("/api/meetings", params={"congress": now - 2}).status_code == 422
     assert stub_client.get("/api/meetings", params={"congress": 42}).status_code == 422
-    assert stub_client.get("/api/meetings", params={"congress": 119}).status_code == 200
+    assert stub_client.get("/api/meetings", params={"congress": now}).status_code == 200
     assert (
-        stub_client.get("/calendar/meetings.ics", params={"congress": 118}).status_code
+        stub_client.get("/calendar/meetings.ics", params={"congress": now - 2}).status_code
         == 422
     )
 
@@ -356,9 +362,12 @@ def test_routes_serve_stale_instead_of_500_when_a_refresh_fails(monkeypatch):
     from fastapi.testclient import TestClient
 
     from congress_calendar.app import create_app
+    from congress_calendar.config import congress_on
+    from congress_calendar.meeting_query import today_in_et
 
     monkeypatch.setenv("CONGRESS_API_KEY", "test-key")
-    calls = {"n": 0}
+    calls: dict[int, int] = {}
+    now = congress_on(today_in_et())
     # The routes apply the real date window, so the meeting has to sit inside
     # it whenever the test runs — a fixed date ages out and the test goes red.
     good = [
@@ -372,9 +381,11 @@ def test_routes_serve_stale_instead_of_500_when_a_refresh_fails(monkeypatch):
     ]
 
     async def flaky(self, congress):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return good
+        # Per congress: the default window loads two in the month after
+        # January 3, and each must succeed once before its refresh fails.
+        calls[congress] = calls.get(congress, 0) + 1
+        if calls[congress] == 1:
+            return good if congress == now else []
         raise CongressApiError("OVER_RATE_LIMIT", "boom")
 
     monkeypatch.setattr(

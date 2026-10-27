@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ..committees import COMMITTEES_119
+from ..committees import COMMITTEES
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ async def landing(request: Request) -> HTMLResponse:
     # Plain placeholder substitution, not str.format — the page is mostly CSS and
     # JS, and doubling every brace makes it unreadable.
     html = _PAGE_TEMPLATE.replace("%%BASE_URL%%", base_url).replace(
-        "%%COMMITTEES_JSON%%", json.dumps(COMMITTEES_119)
+        "%%COMMITTEES_JSON%%", json.dumps(COMMITTEES)
     )
     return HTMLResponse(html)
 

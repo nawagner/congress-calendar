@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from congress_calendar.app import create_app
+from congress_calendar.config import congress_on
 
 ET = ZoneInfo("America/New_York")
 
@@ -91,7 +92,9 @@ def stub_client(monkeypatch):
     """Test client whose Congress.gov calls return fixed data — no network."""
 
     async def fake_fetch(self, congress):
-        return RAW_MEETINGS
+        # Only the sitting Congress has these meetings; the outgoing one, which
+        # the default window also loads for a month after January 3, is empty.
+        return RAW_MEETINGS if congress == congress_on(datetime.now(ET).date()) else []
 
     monkeypatch.setattr(
         "congress_calendar.congress_client.CongressClient.fetch_meetings", fake_fetch

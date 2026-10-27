@@ -42,7 +42,7 @@ Both `/calendar/meetings.ics` and `/api/meetings` take the same filters.
 |-----------|------|---------|-------------|
 | `chamber` | `house` or `senate` | all | Filter by chamber |
 | `committee` | string | all | Comma-separated committee system codes |
-| `congress` | int | 119 | Congress number (only supported congresses; others 422) |
+| `congress` | int | current | Congress number (only supported congresses; others 422) |
 | `days_ahead` | 0–365 | 30 | Days into the future |
 | `days_behind` | 0–365 | 30 | Days into the past |
 
@@ -64,7 +64,8 @@ calendar is a shareable link: `/?chamber=senate&committee=ssju00`.
 | `CACHE_TTL_MINUTES` | no | 30 | API response cache TTL |
 | `DETAIL_CONCURRENCY` | no | 75 | Parallel detail fetches during a cold load |
 | `WARM_CACHE_ON_STARTUP` | no | true | Fill the cache on boot instead of on first request |
-| `SUPPORTED_CONGRESSES` | no | `[119]` | Congresses the API will fetch; others are rejected |
+| `DEFAULT_CONGRESS` | no | from the date | Pin the default view to one Congress instead of following the calendar |
+| `SUPPORTED_CONGRESSES` | no | `[]` | Extra Congresses the `congress` param may name, on top of the current and previous ones; others are rejected |
 | `MAX_RETRY_DELAY` | no | 30 | Longest `Retry-After` (seconds) worth waiting out; longer ones fail fast so cached data is served |
 
 ## Deployment
@@ -102,7 +103,7 @@ src/congress_calendar/
 ├── ical_builder.py     # iCal (RFC 5545) calendar generation
 ├── cache.py            # TTL cache per Congress + per-event detail cache
 ├── models.py           # CommitteeMeeting + CommitteeInfo models
-├── committees.py       # Static committee list for 119th Congress
+├── committees.py       # Static committee list (codes are stable across Congresses)
 └── routes/
     ├── landing.py      # Web UI at /
     ├── calendar_feed.py # iCal feed at /calendar/meetings.ics
@@ -145,8 +146,17 @@ fetch instead of starting a second one — two concurrent cold loads would doubl
 an already expensive job and can breach the hourly API budget. That lock is per
 congress, so one cold load never stalls requests for another.
 
-Because each congress costs a full enumeration, `congress` only accepts values
-in `SUPPORTED_CONGRESSES`; anything else is a 422 and costs no API calls.
+The Congress number comes from the date: each Congress convenes on January 3
+of an odd year, so the 120th takes over on 2027-01-03 with no deploy. A window
+that starts before that date reaches into the outgoing Congress, so the app
+loads both: by default for the `days_behind` days after the switch, and for as
+long as a wider `days_behind` reaches back across it. The boot warm-up loads
+whatever the default window needs, at roughly twice the usual cold-load cost
+that first month.
+
+Because each congress costs a full enumeration, `congress` only accepts the
+current Congress and the previous one, plus any in `SUPPORTED_CONGRESSES`;
+anything else is a 422 and costs no API calls.
 
 Measured on a deployment: ~98s cold with no warm-up, versus ~1.4s for a TTL
 refresh once the detail cache is populated, against a ~0.55s baseline. Note the

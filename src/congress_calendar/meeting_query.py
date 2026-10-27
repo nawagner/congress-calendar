@@ -6,14 +6,14 @@ meetings a given set of filters produces.
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Request
 
 from .cache import CongressLocks, DetailCache, MeetingCache
-from .config import Settings
+from .config import Settings, congress_on
 from .congress_client import CongressClient
 from .models import CommitteeMeeting
 
@@ -46,39 +46,96 @@ async def load_meetings(
     settings = request.app.state.settings
     cache: MeetingCache = request.app.state.cache
 
-    congress = congress or settings.default_congress
-    if congress not in settings.supported_congresses | {settings.default_congress}:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Congress {congress} is not available; supported: "
-            + ", ".join(str(c) for c in sorted(settings.supported_congresses)),
-        )
     days_ahead = days_ahead if days_ahead is not None else settings.days_ahead
     days_behind = days_behind if days_behind is not None else settings.days_behind
 
-    today = datetime.now(ET).date()
-    from_date = (today - timedelta(days=days_behind)).isoformat()
-    to_date = (today + timedelta(days=days_ahead)).isoformat()
+    today = today_in_et()
+    start = today - timedelta(days=days_behind)
+    end = today + timedelta(days=days_ahead)
 
-    raw_meetings = await fetch_into_cache(
-        settings,
-        cache,
-        request.app.state.details,
-        request.app.state.locks,
-        congress,
-    )
+    if congress is not None:
+        allowed = supported_congresses(settings, today)
+        if congress not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Congress {congress} is not available; supported: "
+                + ", ".join(str(c) for c in sorted(allowed)),
+            )
+        congresses = [congress]
+    else:
+        congresses = window_congresses(settings, start, today)
 
-    meetings = parse_meetings(raw_meetings, congress)
+    reported = congress if congress is not None else current_congress(settings, today)
+    meetings: list[CommitteeMeeting] = []
+    for number in congresses:
+        try:
+            raw_meetings = await fetch_into_cache(
+                settings,
+                cache,
+                request.app.state.details,
+                request.app.state.locks,
+                number,
+            )
+        except Exception:
+            if number == reported:
+                raise
+            # The outgoing Congress only adds the tail of a window that reaches
+            # back past January 3. Losing it beats failing the whole calendar.
+            logger.exception(
+                "Could not load congress %d; serving the window without it", number
+            )
+            continue
+        meetings.extend(parse_meetings(raw_meetings, number))
+
+    from_date = start.isoformat()
+    to_date = end.isoformat()
     meetings = filter_by_date(meetings, from_date, to_date)
     if chamber:
         meetings = [m for m in meetings if m.chamber == chamber]
 
     return MeetingWindow(
-        congress=congress,
+        congress=reported,
         from_date=from_date,
         to_date=to_date,
         meetings=meetings,
     )
+
+
+def today_in_et() -> date:
+    return datetime.now(ET).date()
+
+
+def current_congress(settings: Settings, today: date) -> int:
+    """The default Congress: pinned by config, else the one sitting today."""
+    if settings.default_congress is not None:
+        return settings.default_congress
+    return congress_on(today)
+
+
+def supported_congresses(settings: Settings, today: date) -> set[int]:
+    """Congresses an explicit `congress` param may name.
+
+    The current Congress and the one before it, plus any SUPPORTED_CONGRESSES.
+    That caps what the public param can force at one extra enumeration.
+    """
+    now = current_congress(settings, today)
+    automatic = {now} if settings.default_congress is not None else {now - 1, now}
+    return automatic | (settings.supported_congresses or set())
+
+
+def window_congresses(settings: Settings, start: date, today: date) -> list[int]:
+    """Congresses to load for a date window when no `congress` is given.
+
+    A window starting before January 3 of an odd year reaches into the
+    outgoing Congress too; without it, a window looking back across the switch
+    would drop the 119th's last meetings. Judged from the request's own start,
+    so a wide window keeps them after the first month too. Never more than the
+    current Congress and the one before it; a pinned default loads only itself.
+    """
+    if settings.default_congress is not None:
+        return [settings.default_congress]
+    now = congress_on(today)
+    return list(range(max(congress_on(start), now - 1), now + 1))
 
 
 async def fetch_into_cache(
